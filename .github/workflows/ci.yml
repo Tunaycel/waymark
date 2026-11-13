@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint · Typecheck · Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Migrations are in sync with the schema
+        run: |
+          pnpm db:generate
+          git diff --exit-code -- packages/db/drizzle || (echo "::error::Schema changed without a migration. Run 'pnpm db:generate' and commit the result." && exit 1)
+          test -z "$(git status --porcelain -- packages/db/drizzle)" || (echo "::error::Untracked migration generated. Run 'pnpm db:generate' and commit it." && git status --porcelain && exit 1)
+
+  integration:
+    name: Integration (Postgres + Redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: waymark
+          POSTGRES_PASSWORD: waymark
+          POSTGRES_DB: waymark
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U waymark -d waymark"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports: ["6380:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_URL: postgres://waymark:waymark@localhost:5433/waymark
+      REDIS_URL: redis://localhost:6380
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm test:integration

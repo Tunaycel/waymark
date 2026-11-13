@@ -1,0 +1,35 @@
+# Local infrastructure for development and integration tests.
+# Ports are offset (5433 / 6380) so they don't clash with a Postgres/Redis you may already run.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: waymark
+      POSTGRES_PASSWORD: waymark
+      POSTGRES_DB: waymark
+    ports:
+      - "${WAYMARK_PG_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U waymark -d waymark"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "${WAYMARK_REDIS_PORT:-6380}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+  redisdata:

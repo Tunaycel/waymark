@@ -1,0 +1,10 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "tasks": {
+    "typecheck": { "outputs": [] },
+    "build": { "dependsOn": ["typecheck"], "outputs": [] },
+    "test": { "outputs": [] },
+    "test:integration": { "cache": false, "outputs": [], "env": ["DATABASE_URL", "REDIS_URL"] },
+    "dev": { "cache": false, "persistent": true }
+  }
+}
