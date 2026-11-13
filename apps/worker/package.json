@@ -1,0 +1,22 @@
+{
+  "name": "@waymark/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "@waymark/core": "workspace:*",
+    "@waymark/db": "workspace:*",
+    "@waymark/queue": "workspace:*",
+    "pino": "^10.4.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "start": "node --env-file-if-exists=../../.env src/main.ts",
+    "dev": "node --watch --env-file-if-exists=../../.env src/main.ts"
+  },
+  "exports": {
+    ".": "./src/processor.ts"
+  }
+}
