@@ -1,0 +1,21 @@
+{
+  "name": "@waymark/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test:integration": "vitest run"
+  },
+  "devDependencies": {
+    "@waymark/core": "workspace:*",
+    "@waymark/db": "workspace:*",
+    "@waymark/queue": "workspace:*",
+    "@waymark/server": "workspace:*",
+    "@waymark/worker": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "pino": "^10.4.0",
+    "vitest": "^5.1.0"
+  }
+}
