@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EnvError, loadBaseEnv, loadServerEnv } from './env.ts';
+import { EnvError, loadBaseEnv, loadServerEnv, loadWorkerEnv } from './env.ts';
 
 const valid = {
   DATABASE_URL: 'postgres://u:p@localhost:5433/waymark',
@@ -37,5 +37,32 @@ describe('env', () => {
   it('does not require the webhook secret for non-server processes', () => {
     const { GITHUB_WEBHOOK_SECRET: _omit, ...rest } = valid;
     expect(() => loadBaseEnv(rest)).not.toThrow();
+  });
+
+  describe('worker GitHub App credentials', () => {
+    const base = { DATABASE_URL: valid.DATABASE_URL, REDIS_URL: valid.REDIS_URL };
+    const key = '-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----';
+
+    it('are optional, so ingestion runs without indexing', () => {
+      expect(loadWorkerEnv(base)).toMatchObject({ GITHUB_API_URL: 'https://api.github.com' });
+    });
+
+    it('are accepted together', () => {
+      expect(
+        loadWorkerEnv({ ...base, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: key }),
+      ).toMatchObject({
+        GITHUB_APP_ID: '123',
+      });
+    });
+
+    it('reject a half configuration and a non-numeric App ID', () => {
+      expect(() => loadWorkerEnv({ ...base, GITHUB_APP_ID: '123' })).toThrow(/both/);
+      expect(() =>
+        loadWorkerEnv({ ...base, GITHUB_APP_ID: 'my-app', GITHUB_APP_PRIVATE_KEY: key }),
+      ).toThrow(EnvError);
+      expect(() =>
+        loadWorkerEnv({ ...base, GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: 'secret' }),
+      ).toThrow(/PEM/);
+    });
   });
 });

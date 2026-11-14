@@ -2,6 +2,7 @@ import type { PushJob } from '@waymark/core';
 import { sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Database } from './client.ts';
+import { cleanText } from './sanitize.ts';
 import { commits, repositories } from './schema.ts';
 
 export interface IngestResult {
@@ -57,8 +58,9 @@ export async function ingestPush(db: Database, job: PushJob): Promise<IngestResu
         repositoryId: repo.id,
         sha: c.sha,
         branch: job.branch,
-        message: c.message,
-        authorName: c.authorName,
+        // Payload JSON may carry escapes Postgres text rejects (NUL, lone surrogates).
+        message: cleanText(c.message),
+        authorName: cleanText(c.authorName),
         authorUsername: c.authorUsername,
         committedAt: new Date(c.committedAt),
         url: c.url,

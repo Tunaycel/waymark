@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@waymark/core": "workspace:*",
+    "@waymark/indexer": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "postgres": "^4.1.1"
   },

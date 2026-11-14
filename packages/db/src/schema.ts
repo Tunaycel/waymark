@@ -1,10 +1,13 @@
+import type { RepoIndex } from '@waymark/indexer';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
   index,
+  integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -73,5 +76,66 @@ export const commits = pgTable(
   ],
 );
 
+/** Everything in an index except the per-file rows, which live in their own tables. */
+export type SnapshotSummary = Omit<RepoIndex, 'files' | 'edges'>;
+
+/**
+ * The structural index of a repository at one commit: the input the map is drawn from.
+ * One row per (repository, commit); re-indexing the same commit is a no-op.
+ */
+export const repoSnapshots = pgTable(
+  'repo_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    commitSha: text('commit_sha').notNull(),
+    indexedAt: timestamp('indexed_at', { withTimezone: true }).notNull().defaultNow(),
+    durationMs: integer('duration_ms').notNull(),
+    fileCount: integer('file_count').notNull(),
+    edgeCount: integer('edge_count').notNull(),
+    /** A size limit stopped indexing early; the map is partial. */
+    truncated: boolean('truncated').notNull(),
+    summary: jsonb('summary').$type<SnapshotSummary>().notNull(),
+  },
+  (t) => [
+    uniqueIndex('repo_snapshots_repository_sha_key').on(t.repositoryId, t.commitSha),
+    index('repo_snapshots_repository_indexed_at_idx').on(t.repositoryId, t.indexedAt.desc()),
+  ],
+);
+
+export const snapshotFiles = pgTable(
+  'snapshot_files',
+  {
+    snapshotId: uuid('snapshot_id')
+      .notNull()
+      .references(() => repoSnapshots.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    language: text('language'),
+    kind: text('kind').notNull(),
+    module: text('module').notNull(),
+    size: integer('size').notNull(),
+    lines: integer('lines'),
+    /** Git blob SHA: compare with the next snapshot to find changed files without diffing content. */
+    blobSha: text('blob_sha'),
+  },
+  (t) => [primaryKey({ columns: [t.snapshotId, t.path] })],
+);
+
+/** File-level import graph of a snapshot (`from` imports `to`). */
+export const snapshotEdges = pgTable(
+  'snapshot_edges',
+  {
+    snapshotId: uuid('snapshot_id')
+      .notNull()
+      .references(() => repoSnapshots.id, { onDelete: 'cascade' }),
+    fromPath: text('from_path').notNull(),
+    toPath: text('to_path').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.snapshotId, t.fromPath, t.toPath] })],
+);
+
 export type Repository = typeof repositories.$inferSelect;
 export type Commit = typeof commits.$inferSelect;
+export type RepoSnapshot = typeof repoSnapshots.$inferSelect;

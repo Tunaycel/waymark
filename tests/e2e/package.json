@@ -9,13 +9,17 @@
     "test:integration": "vitest run"
   },
   "devDependencies": {
+    "@types/tar-stream": "^3.1.5",
     "@waymark/core": "workspace:*",
     "@waymark/db": "workspace:*",
+    "@waymark/github": "workspace:*",
+    "@waymark/indexer": "workspace:*",
     "@waymark/queue": "workspace:*",
     "@waymark/server": "workspace:*",
     "@waymark/worker": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "pino": "^10.4.0",
+    "tar-stream": "^3.2.2",
     "vitest": "^5.1.0"
   }
 }

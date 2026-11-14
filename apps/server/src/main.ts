@@ -1,5 +1,11 @@
 import { EnvError, loadServerEnv } from '@waymark/core';
-import { createGitHubEventsQueue, createRedisHealthCheck, enqueuePush } from '@waymark/queue';
+import {
+  createGitHubEventsQueue,
+  createIndexQueue,
+  createRedisHealthCheck,
+  enqueueIndex,
+  enqueuePush,
+} from '@waymark/queue';
 import { buildApp } from './app.ts';
 
 let env: ReturnType<typeof loadServerEnv>;
@@ -14,11 +20,16 @@ try {
 }
 
 const queue = createGitHubEventsQueue(env.REDIS_URL);
+const indexQueue = createIndexQueue(env.REDIS_URL);
 const redisHealth = createRedisHealthCheck(env.REDIS_URL);
 
 const app = buildApp({
   webhookSecret: env.GITHUB_WEBHOOK_SECRET,
   enqueuePush: (job) => enqueuePush(queue, job),
+  // Installation events carry no commit to debounce; index right away.
+  enqueueIndex: async (jobs) => {
+    await Promise.all(jobs.map((job) => enqueueIndex(indexQueue, job, 0)));
+  },
   isReady: redisHealth.isReady,
   logger: { level: env.LOG_LEVEL },
   trustProxyHops: env.TRUST_PROXY_HOPS,
@@ -26,6 +37,7 @@ const app = buildApp({
 
 // Without a listener, connection errors would be dumped unstructured to stderr.
 queue.on('error', (err) => app.log.error({ err }, 'queue connection error'));
+indexQueue.on('error', (err) => app.log.error({ err }, 'index queue connection error'));
 
 /** Upper bound for a graceful stop; orchestrators SIGKILL after ~10–30 s anyway. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -41,6 +53,7 @@ async function shutdown(signal: string) {
   // Stop accepting requests first, let in-flight enqueues finish, then drop Redis connections.
   await app.close();
   await queue.close();
+  await indexQueue.close();
   await redisHealth.close();
   process.exit(0);
 }

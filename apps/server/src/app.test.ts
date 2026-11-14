@@ -164,6 +164,64 @@ describe('POST /webhooks/github', () => {
   });
 });
 
+describe('installation events', () => {
+  function installApp(enqueueIndex = vi.fn(async () => {})) {
+    const app = buildApp({
+      webhookSecret: secret,
+      enqueuePush: async () => ({ jobId: 'x', status: 'queued' }),
+      enqueueIndex,
+    });
+    return { app, enqueueIndex };
+  }
+
+  it('schedules an initial index for every repository of a new installation', async () => {
+    const { app, enqueueIndex } = installApp();
+    const res = await deliver(app, 'installation', {
+      action: 'created',
+      installation: { id: 7 },
+      repositories: [
+        { id: 1, full_name: 'octo/a' },
+        { id: 2, full_name: 'octo/b' },
+      ],
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ status: 'queued', repositories: 2 });
+    expect(enqueueIndex).toHaveBeenCalledWith([
+      { githubId: 1, fullName: 'octo/a', installationId: 7, sha: null, reason: 'installation' },
+      { githubId: 2, fullName: 'octo/b', installationId: 7, sha: null, reason: 'installation' },
+    ]);
+  });
+
+  it('acknowledges installation actions it does not act on', async () => {
+    const { app, enqueueIndex } = installApp();
+    const res = await deliver(app, 'installation', { action: 'deleted', installation: { id: 7 } });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ status: 'skipped' });
+    expect(enqueueIndex).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 when indexing cannot be scheduled, so GitHub can redeliver', async () => {
+    const { app } = installApp(
+      vi.fn(async () => {
+        throw new Error('redis down');
+      }),
+    );
+    const res = await deliver(app, 'installation_repositories', {
+      action: 'added',
+      installation: { id: 7 },
+      repositories_added: [{ id: 3, full_name: 'octo/c' }],
+    });
+    expect(res.statusCode).toBe(503);
+  });
+
+  it('still requires a valid signature', async () => {
+    const { app, enqueueIndex } = installApp();
+    const res = await deliver(app, 'installation', { action: 'created' }, { signature: null });
+    expect(res.statusCode).toBe(401);
+    expect(enqueueIndex).not.toHaveBeenCalled();
+  });
+});
+
 describe('client IP handling', () => {
   function ipApp(trustProxyHops?: number) {
     const app = buildApp({
