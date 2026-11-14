@@ -20,7 +20,9 @@
     "db:migrate": "pnpm --filter @waymark/db migrate",
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down",
-    "bench": "pnpm --filter @waymark/scripts bench"
+    "bench": "pnpm --filter @waymark/scripts bench",
+    "map:local": "pnpm --filter @waymark/indexer map",
+    "bench:index": "pnpm --filter @waymark/scripts bench:index"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",
