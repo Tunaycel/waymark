@@ -1,6 +1,7 @@
 import { EnvError, loadWorkerEnv } from '@waymark/core';
 import { createDatabase } from '@waymark/db';
 import { GitHubApp } from '@waymark/github';
+import { ClaudeDescriber, type Describer, OllamaDescriber } from '@waymark/mapper';
 import {
   createGitHubEventsWorker,
   createIndexQueue,
@@ -35,6 +36,7 @@ try {
 
 const log = createLogger(env.LOG_LEVEL);
 const database = createDatabase(env.DATABASE_URL);
+const describer = topicDescriber(env);
 const indexQueue = github ? createIndexQueue(env.REDIS_URL) : null;
 indexQueue?.on('error', (err) => log.error({ err }, 'index queue connection error'));
 
@@ -45,7 +47,18 @@ const eventsWorker = createGitHubEventsWorker(
   }),
 );
 const indexWorker = github
-  ? createIndexWorker(env.REDIS_URL, createIndexProcessor({ db: database.db, github, log }))
+  ? createIndexWorker(
+      env.REDIS_URL,
+      createIndexProcessor({
+        db: database.db,
+        github,
+        log,
+        topics: {
+          describer,
+          monthlyBudgetUsd: env.WAYMARK_LLM_MONTHLY_BUDGET_USD,
+        },
+      }),
+    )
   : null;
 if (!github) {
   log.warn('GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY not set: repository indexing is disabled');
@@ -83,4 +96,33 @@ process.once('SIGINT', () => void shutdown('SIGINT'));
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
 
 await Promise.all([eventsWorker.waitUntilReady(), indexWorker?.waitUntilReady()]);
-log.info({ indexing: github !== null }, 'worker ready');
+log.info(
+  {
+    indexing: github !== null,
+    topicNames: describer?.model ?? 'heuristic',
+    aiBudgetUsd: env.WAYMARK_LLM_MONTHLY_BUDGET_USD,
+  },
+  'worker ready',
+);
+
+/** The AI that names topics, per WAYMARK_LLM_PROVIDER; `null` means heuristic labels only. */
+function topicDescriber(e: typeof env): Describer | null {
+  const provider =
+    e.WAYMARK_LLM_PROVIDER === 'auto'
+      ? e.ANTHROPIC_API_KEY
+        ? 'claude'
+        : e.OLLAMA_MODEL
+          ? 'ollama'
+          : 'none'
+      : e.WAYMARK_LLM_PROVIDER;
+  if (provider === 'claude' && e.ANTHROPIC_API_KEY) {
+    return new ClaudeDescriber({
+      apiKey: e.ANTHROPIC_API_KEY,
+      ...(e.WAYMARK_LLM_MODEL ? { model: e.WAYMARK_LLM_MODEL } : {}),
+    });
+  }
+  if (provider === 'ollama' && e.OLLAMA_MODEL) {
+    return new OllamaDescriber({ model: e.OLLAMA_MODEL, baseUrl: e.OLLAMA_URL });
+  }
+  return null;
+}

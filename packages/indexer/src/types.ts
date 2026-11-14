@@ -44,6 +44,10 @@ export interface IndexedFile {
   lines: number | null;
   /** Git blob SHA-1 of the content: equal to GitHub's tree SHA, so unchanged files are cheap to detect. */
   blobSha: string | null;
+  /** Exported functions, classes, and types (JS/TS, Python, Go), at most 30. */
+  symbols: string[];
+  /** External packages this file imports, at most 20. */
+  externals: string[];
 }
 
 export interface FileEdge {
@@ -81,9 +85,17 @@ export interface Manifest {
   path: string;
   ecosystem: Ecosystem;
   name: string | null;
+  /** The package's own one-line description, when it has one. */
+  description: string | null;
   dependencies: string[];
   devDependencies: string[];
   scripts: string[];
+}
+
+export interface ReadmeExcerpt {
+  path: string;
+  /** First heading and paragraph, at most 400 characters. */
+  text: string;
 }
 
 export type MarkerKind = 'TODO' | 'FIXME' | 'HACK' | 'XXX' | 'BUG';
@@ -129,6 +141,8 @@ export interface RepoIndex {
   manifests: Manifest[];
   frameworks: string[];
   markers: Marker[];
+  /** Title and opening paragraph of README files, shallowest first (at most 50). */
+  readmes: ReadmeExcerpt[];
   /** Up to 50 unresolved internal-looking imports, for diagnosing resolver gaps. */
   unresolvedSamples: { from: string; specifier: string }[];
   stats: IndexStats;
@@ -150,4 +164,6 @@ export interface Comment {
 export interface ScanResult {
   imports: RawImport[];
   comments: Comment[];
+  /** Exported functions, classes, and types, in source order. */
+  symbols: string[];
 }

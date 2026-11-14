@@ -34,6 +34,7 @@ pnpm test                # unit tests (no infrastructure needed)
 pnpm test:integration    # real Postgres + Redis; requires infra:up
 pnpm db:generate         # after editing packages/db/src/schema.ts — commit the generated SQL
 pnpm map:local <path>    # index a local checkout and print modules, edges, dependencies
+pnpm topics:local <path|owner/repo> [--describe]   # topics; --describe calls Claude (costs money)
 pnpm bench               # webhook load test (needs a running server + worker)
 pnpm bench:index o/r …   # index public GitHub repositories and report timings
 ```
@@ -51,5 +52,10 @@ pnpm bench:index o/r …   # index public GitHub repositories and report timings
   drift.
 - Tests: unit tests next to the code (`*.test.ts`); anything needing Postgres/Redis goes in
   `tests/e2e`.
+- Source files must not contain invisible or control characters (zero-width, bidi overrides,
+  NUL, BOM); build them with `String.fromCharCode` when code needs them. `pnpm check:text` (CI)
+  enforces it — the formatter has been seen turning `\u` escapes into raw characters.
+- Never make real AI calls in tests or CI; use fake describers. Real calls cost money and are
+  only for deliberate quality/cost measurements.
 - The indexer must never execute or trust repository content: no `require` of user code, no
   following symlinks, paths normalised and length-limited, size limits on files and archives.

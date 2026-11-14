@@ -35,7 +35,9 @@ import {
   type ModuleEdge,
   type ModuleSummary,
   type RawImport,
+  type ReadmeExcerpt,
   type RepoIndex,
+  type ScanResult,
   type SourceFile,
   type TruncatableSource,
 } from './types.ts';
@@ -56,6 +58,41 @@ const ECOSYSTEM: Record<Family, Ecosystem> = { js: 'npm', python: 'pypi', go: 'g
 
 const MARKERS_PER_FILE = 100;
 const MARKER_COLLECTION_LIMIT = 50_000;
+
+const README = /^readme(\.(md|mdx|markdown|rst|txt))?$/i;
+const MAX_README_CANDIDATES = 2_000;
+const MAX_READMES = 50;
+const README_EXCERPT_CHARS = 400;
+
+/**
+ * Title and opening paragraph of a README: what the authors say the code is for. Badges, images,
+ * HTML, and link targets are dropped; the result is plain text of at most 400 characters.
+ */
+export function readmeExcerpt(text: string): string | null {
+  const kept: string[] = [];
+  let paragraphStarted = false;
+  for (const raw of text.slice(0, 20_000).split(/\r?\n/)) {
+    const line = raw
+      .replace(/<[^>]{0,500}>/g, ' ')
+      .replace(/!\[[^\]]{0,200}\]\([^)]{0,500}\)/g, ' ')
+      .replace(/\[([^\]]{0,200})\]\([^)]{0,500}\)/g, '$1')
+      .replace(/^[#=\-*>\s]+/, '')
+      .replace(/[*_`]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (line === '') {
+      if (paragraphStarted) break;
+      continue;
+    }
+    kept.push(line);
+    // The title line, then the first paragraph after it.
+    if (kept.length > 1) paragraphStarted = true;
+    if (kept.join(' ').length > README_EXCERPT_CHARS) break;
+  }
+  const joined = kept.join(' — ').trim();
+  if (joined === '') return null;
+  return Array.from(joined).slice(0, README_EXCERPT_CHARS).join('');
+}
 
 const TS_CONFIG = /^(tsconfig|jsconfig)([\w.-]*)\.json$/;
 const BINARY_SNIFF_BYTES = 8_000;
@@ -123,6 +160,7 @@ export async function indexRepository(
   const manifests: ParsedManifest[] = [];
   const configs = new Map<string, string>();
   const markers: Marker[] = [];
+  const readmes: ReadmeExcerpt[] = [];
   const languages: Record<string, { files: number; lines: number }> = {};
   let bytes = 0;
   let totalLines = 0;
@@ -154,6 +192,8 @@ export async function indexRepository(
       size: entry.size,
       lines: null,
       blobSha: null,
+      symbols: [],
+      externals: [],
     };
     const item: Pending = {
       file,
@@ -191,8 +231,12 @@ export async function indexRepository(
     }
     if (name === 'setup.py') pythonProjectDirs.push(dirname(path));
     if (TS_CONFIG.test(name)) configs.set(path, text);
+    if (README.test(name) && readmes.length < MAX_README_CANDIDATES) {
+      const excerpt = readmeExcerpt(text);
+      if (excerpt) readmes.push({ path, text: excerpt });
+    }
 
-    let scan: { imports: RawImport[]; comments: { text: string; line: number }[] } | null = null;
+    let scan: ScanResult | null = null;
     if (language === 'TypeScript' || language === 'JavaScript') scan = scanJavaScript(text);
     else if (language === 'Vue' || language === 'Svelte' || language === 'Astro') {
       scan = scanComponent(text);
@@ -201,6 +245,7 @@ export async function indexRepository(
 
     if (scan) {
       item.imports = scan.imports;
+      file.symbols = scan.symbols;
     }
     // Markers are collected with generous bounds, then sorted and cut, so which ones are kept
     // doesn't depend on the order files arrive in.
@@ -289,6 +334,9 @@ export async function indexRepository(
           const users = externalUsers.get(key) ?? { ecosystem, name: r.name, files: new Set() };
           users.files.add(file.path);
           externalUsers.set(key, users);
+          if (file.externals.length < 20 && !file.externals.includes(r.name)) {
+            file.externals.push(r.name);
+          }
         } else if (r.kind === 'builtin') {
           importStats.builtin++;
         } else if (r.kind === 'ignored') {
@@ -358,6 +406,11 @@ export async function indexRepository(
     manifests: parsedManifests,
     frameworks: detectFrameworks(parsedManifests),
     markers: markers.slice(0, limits.maxMarkers),
+    readmes: readmes
+      .sort(
+        (a, b) => a.path.split('/').length - b.path.split('/').length || compare(a.path, b.path),
+      )
+      .slice(0, MAX_READMES),
     unresolvedSamples,
     stats: {
       files: indexedFiles.length,

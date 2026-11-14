@@ -7,7 +7,7 @@ import { repoSnapshots, repositories, snapshotEdges, snapshotFiles } from './sch
 /** Snapshots kept per repository; older ones are pruned when a new one is saved. */
 export const SNAPSHOTS_KEPT = 3;
 
-/** 8 columns x 1,000 rows and 3 x 5,000 stay well under Postgres' 65,535-parameter limit. */
+/** 10 columns x 1,000 rows and 3 x 5,000 stay well under Postgres' 65,535-parameter limit. */
 const FILE_CHUNK = 1_000;
 const EDGE_CHUNK = 5_000;
 
@@ -55,6 +55,8 @@ export async function saveSnapshot(
           size: f.size,
           lines: f.lines,
           blobSha: f.blobSha,
+          symbols: f.symbols,
+          externals: f.externals,
         })),
       );
     }
@@ -80,6 +82,22 @@ export async function saveSnapshot(
 
     return { snapshotId: snapshot.id, created: true };
   });
+}
+
+/** The snapshot of a commit, if it was indexed, and whether its topics were built. */
+export async function findSnapshot(
+  db: Database,
+  repositoryId: string,
+  commitSha: string,
+): Promise<{ id: string; topicsBuiltAt: Date | null } | null> {
+  const [row] = await db
+    .select({ id: repoSnapshots.id, topicsBuiltAt: repoSnapshots.topicsBuiltAt })
+    .from(repoSnapshots)
+    .where(
+      and(eq(repoSnapshots.repositoryId, repositoryId), eq(repoSnapshots.commitSha, commitSha)),
+    )
+    .limit(1);
+  return row ?? null;
 }
 
 export async function hasSnapshot(

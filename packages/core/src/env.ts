@@ -32,6 +32,17 @@ const workerSchema = baseSchema
       .includes('PRIVATE KEY', { message: 'GITHUB_APP_PRIVATE_KEY must be a PEM private key' })
       .optional(),
     GITHUB_API_URL: z.url({ protocol: /^https?$/ }).default('https://api.github.com'),
+    /**
+     * Who names topics: `auto` uses Claude when ANTHROPIC_API_KEY is set, else Ollama when
+     * OLLAMA_MODEL is set, else heuristic labels only.
+     */
+    WAYMARK_LLM_PROVIDER: z.enum(['auto', 'claude', 'ollama', 'none']).default('auto'),
+    ANTHROPIC_API_KEY: z.string().min(20, 'ANTHROPIC_API_KEY looks truncated').optional(),
+    WAYMARK_LLM_MODEL: z.string().min(1).optional(),
+    OLLAMA_URL: z.url({ protocol: /^https?$/ }).default('http://127.0.0.1:11434'),
+    OLLAMA_MODEL: z.string().min(1).optional(),
+    /** Hard monthly cap on AI spend, in USD. 0 disables paid calls. */
+    WAYMARK_LLM_MONTHLY_BUDGET_USD: z.coerce.number().min(0).max(10_000).default(2),
   })
   .refine(
     (env) => (env.GITHUB_APP_ID === undefined) === (env.GITHUB_APP_PRIVATE_KEY === undefined),
@@ -39,7 +50,15 @@ const workerSchema = baseSchema
       message: 'set both GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY, or neither',
       path: ['GITHUB_APP_PRIVATE_KEY'],
     },
-  );
+  )
+  .refine((env) => env.WAYMARK_LLM_PROVIDER !== 'claude' || env.ANTHROPIC_API_KEY, {
+    message: 'WAYMARK_LLM_PROVIDER=claude needs ANTHROPIC_API_KEY',
+    path: ['ANTHROPIC_API_KEY'],
+  })
+  .refine((env) => env.WAYMARK_LLM_PROVIDER !== 'ollama' || env.OLLAMA_MODEL, {
+    message: 'WAYMARK_LLM_PROVIDER=ollama needs OLLAMA_MODEL (e.g. qwen3.5:4b)',
+    path: ['OLLAMA_MODEL'],
+  });
 
 export type BaseEnv = z.infer<typeof baseSchema>;
 export type ServerEnv = z.infer<typeof serverSchema>;

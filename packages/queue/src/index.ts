@@ -224,6 +224,9 @@ export function createIndexWorker(
     concurrency: 1,
     // Large repositories take a while; the lock is renewed in the background meanwhile.
     lockDuration: 120_000,
+    // A job whose worker died mid-run is retried once, then failed: a repository that kills its
+    // worker must not do so in a loop.
+    maxStalledCount: 1,
     ...options,
   });
 }

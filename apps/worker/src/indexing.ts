@@ -1,14 +1,15 @@
-import { type Database, hasSnapshot, saveSnapshot, upsertRepository } from '@waymark/db';
+import { type Database, findSnapshot, saveSnapshot, upsertRepository } from '@waymark/db';
 import { GitHubApiError, type GitHubApp } from '@waymark/github';
 import {
   DEFAULT_LIMITS,
   IndexCrashedError,
   type IndexLimits,
   IndexTimeoutError,
-  indexInThread,
+  indexIsolated,
 } from '@waymark/indexer';
 import { type IndexJob, UnrecoverableError } from '@waymark/queue';
 import type { Logger } from 'pino';
+import { buildSnapshotTopics, type TopicDeps } from './topics.ts';
 
 export type IndexingGitHub = Pick<GitHubApp, 'getRepository' | 'resolveRef' | 'downloadTarball'>;
 
@@ -17,10 +18,12 @@ export interface IndexProcessorDeps {
   github: IndexingGitHub;
   log: Logger;
   limits?: IndexLimits;
-  /** Hard budget for downloading and indexing one repository (the thread is killed after it). */
+  /** Hard budget for downloading and indexing one repository (the process is killed after it). */
   timeoutMs?: number;
-  /** Heap budget of the indexing thread. */
+  /** Heap budget of the indexing process. */
   maxHeapMb?: number;
+  /** Topic building after indexing (AI describer and budget). Absent: no topics. */
+  topics?: Omit<TopicDeps, 'db' | 'log'>;
 }
 
 export type IndexOutcome =
@@ -35,6 +38,20 @@ export type IndexOutcome =
 export function createIndexProcessor(deps: IndexProcessorDeps) {
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const timeoutMs = deps.timeoutMs ?? 10 * 60_000;
+
+  /** Topics are a layer on top of the index: their failure is logged, never fails the job. */
+  const buildTopics = async (snapshotId: string, repoName: string) => {
+    if (!deps.topics) return;
+    try {
+      await buildSnapshotTopics(
+        { ...deps.topics, db: deps.db, log: deps.log },
+        snapshotId,
+        repoName,
+      );
+    } catch (err) {
+      deps.log.error({ err, repo: repoName, snapshotId }, 'topic building failed');
+    }
+  };
 
   return async (job: IndexJob): Promise<IndexOutcome> => {
     try {
@@ -52,7 +69,12 @@ export function createIndexProcessor(deps: IndexProcessorDeps) {
       const sha =
         job.sha ??
         (await deps.github.resolveRef(job.installationId, repo.fullName, repo.defaultBranch));
-      if (await hasSnapshot(deps.db, repositoryId, sha)) return { status: 'unchanged', sha };
+      const existing = await findSnapshot(deps.db, repositoryId, sha);
+      if (existing) {
+        // Indexed before topics existed (or their build failed): build them now.
+        if (!existing.topicsBuiltAt) await buildTopics(existing.id, repo.fullName);
+        return { status: 'unchanged', sha };
+      }
 
       const started = performance.now();
       const signal = AbortSignal.timeout(timeoutMs);
@@ -62,9 +84,9 @@ export function createIndexProcessor(deps: IndexProcessorDeps) {
         sha,
         signal,
       );
-      // Untrusted content is indexed in a separate thread with hard time and memory budgets, so
-      // a pathological repository can't block this process (and the queue lock it renews).
-      const index = await indexInThread(tarball, {
+      // Untrusted content is indexed in a separate process with hard time and memory budgets, so
+      // a pathological repository can't block or crash this one (or the queue lock it renews).
+      const index = await indexIsolated(tarball, {
         limits,
         timeoutMs,
         ...(deps.maxHeapMb ? { maxHeapMb: deps.maxHeapMb } : {}),
@@ -86,7 +108,8 @@ export function createIndexProcessor(deps: IndexProcessorDeps) {
         },
         'repository indexed',
       );
-      if (!saved.created) return { status: 'unchanged', sha };
+      if (!saved.created || !saved.snapshotId) return { status: 'unchanged', sha };
+      await buildTopics(saved.snapshotId, repo.fullName);
       return { status: 'indexed', sha, files: index.stats.files, edges: index.edges.length, ms };
     } catch (err) {
       if (err instanceof GitHubApiError) {

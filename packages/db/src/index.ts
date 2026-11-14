@@ -3,6 +3,7 @@ export { type IngestResult, ingestPush } from './ingest.ts';
 export { migrationsFolder, runMigrations } from './migrate.ts';
 export * from './schema.ts';
 export {
+  findSnapshot,
   hasSnapshot,
   latestSnapshot,
   type RepositoryUpsert,
@@ -11,3 +12,14 @@ export {
   saveSnapshot,
   upsertRepository,
 } from './snapshots.ts';
+export {
+  databaseLedger,
+  type KnownTopicRow,
+  loadRepositoryTopics,
+  loadSnapshotForTopics,
+  pruneRepositoryTopics,
+  saveTopics,
+  snapshotTopicGraph,
+  type TopicToSave,
+  withAdvisoryLock,
+} from './topics.ts';

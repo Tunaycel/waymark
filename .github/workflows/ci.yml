@@ -26,6 +26,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm check:text
       - run: pnpm typecheck
       - run: pnpm test
       - name: Migrations are in sync with the schema
