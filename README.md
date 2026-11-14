@@ -8,7 +8,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 ![Node ≥ 22.18](https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
-![Status](https://img.shields.io/badge/status-phase%201a%20%C2%B7%20indexer-orange)
+![Status](https://img.shields.io/badge/status-phase%201b%20%C2%B7%20topics-orange)
 
 </div>
 
@@ -23,9 +23,9 @@ It is built to grow beyond code: calendar, tasks, mail, and anything else you as
 your morning brief covers your whole day, not just your repositories.
 
 > [!NOTE]
-> Waymark is in **Phase 1a**: every repository is ingested and structurally indexed (files,
-> import graph, modules, dependencies, TODOs). Topic naming, the interactive map, and briefs are
-> next. See the [roadmap](docs/ROADMAP.md).
+> Waymark is in **Phase 1b**: every repository is ingested, structurally indexed, and grouped into
+> named topics ("Session Auth", "Stripe Webhooks") with short summaries. The interactive map and
+> briefs are next. See the [roadmap](docs/ROADMAP.md).
 
 ## How it works
 
@@ -36,9 +36,10 @@ flowchart LR
   S --> Q[("Queue<br/>Redis · BullMQ")]
   Q --> W["Worker<br/>idempotent ingest"]
   W --> DB[("Postgres<br/>+ pgvector")]
-  W -->|"default branch:<br/>debounced"| IX["Indexer thread<br/>tarball → import graph"]
-  IX --> DB
-  DB -.-> M["Living map<br/>(Phase 1b–d)"]
+  W -->|"default branch:<br/>debounced"| IX["Indexer process<br/>tarball → import graph"]
+  IX --> TP["Topics<br/>cluster · name (Claude Haiku / Ollama)"]
+  TP --> DB
+  DB -.-> M["Living map<br/>(Phase 1c–d)"]
   DB -.-> R["Nightly review<br/>(Phase 2)"]
   DB -.-> B["Morning brief<br/>(Phase 3)"]
 ```
@@ -64,7 +65,9 @@ Each guarantee below is enforced in code **and** pinned by a test.
 | Personal data is minimized | Author emails are dropped during parsing and never reach the queue or the database | [`push.test.ts`](packages/core/src/github/push.test.ts) |
 | A burst of pushes is indexed once; a push during indexing is never lost | Per-repository BullMQ deduplication: replace while delayed, keep the newest while running | [`indexing.test.ts`](tests/e2e/src/indexing.test.ts) · real Redis |
 | Import edges are exact, not grep-based | Own tokenizers skip comments, strings, templates, and regexes; resolvers follow Node/TS, `tsconfig` paths, workspace `exports`, Python package roots, `go.mod` | [`lexers.test.ts`](packages/indexer/src/lexers/lexers.test.ts) · [`resolve.test.ts`](packages/indexer/src/resolve/resolve.test.ts) · 100 % resolved on this repo |
-| A hostile repository can't stall or crash the worker | Indexing runs in a thread with hard time and heap budgets; every lexer, resolver, and parser is linear on adversarial input; archives are metered after decompression | [`isolated.test.ts`](packages/indexer/src/isolated.test.ts) · [`regressions.test.ts`](packages/indexer/src/regressions.test.ts) |
+| A hostile repository can't stall or crash the worker | Indexing runs in a child process with hard time and heap budgets; every lexer, resolver, and parser is linear on adversarial input; archives are metered after decompression | [`isolated.test.ts`](packages/indexer/src/isolated.test.ts) · [`regressions.test.ts`](packages/indexer/src/regressions.test.ts) |
+| AI spend never exceeds the monthly cap | One Postgres lock for all spending across workers; every billed call recorded (also refused or malformed ones); unknown costs charged at the worst case; unchanged topics reuse their paid description | [`describe.test.ts`](packages/mapper/src/describe/describe.test.ts) · [`topics.test.ts`](tests/e2e/src/topics.test.ts) |
+| Topics are deterministic and stable | Deterministic Louvain within package boundaries; ids carried over by file overlap, so small changes keep the same map node | [`topics.test.ts`](packages/mapper/src/topics.test.ts) |
 | Repository content is data, never code | Nothing is executed; symlinks and paths outside the archive root are skipped; text Postgres rejects (NUL, broken surrogates) is cleaned | [`sources.test.ts`](packages/indexer/src/sources/sources.test.ts) · `indexing.test.ts` |
 | Misconfiguration fails at startup, all at once | zod-validated environment, every problem reported together | [`env.test.ts`](packages/core/src/env.test.ts) |
 
@@ -97,12 +100,25 @@ GitHub tarballs (same streaming path as the worker; download time excluded):
 | vercel/next.js (TS monorepo) | 33,698 | 2.48 M | 25,603 | 747 | 98.2 % ¹ | 3.8 s | 3.0 s |
 
 ¹ The remainder are imports of files generated at build time (e.g. benchmark templates).
+
+**Topics**, built from those indexes; names and summaries by Claude Haiku 5.5 (first build; later
+builds only re-describe topics that changed):
+
+| Repository | Topics | Clustering | Naming | AI cost |
+|---|---:|---:|---:|---:|
+| this repository | 14 | 9 ms | 6 s | **$0.0016** |
+| fastify/fastify | 8 | 9 ms | 8 s | $0.0011 |
+| django/django | 149 | 67 ms | 25 s | **$0.019** |
+| vercel/next.js | 875 | 4.0 s | ~3 min | ~$0.12 |
+
+Example names from this repository: *Fastify Server*, *Import Path Resolution*, *Isolated
+Indexing*, *GitHub App Client*, *Louvain Topic Clustering*.
 Throughput is 2.5k–8.9k files/s on one core; next.js peaks at +228 MB RSS.
 
 | Quality gate | Value |
 |---|---|
-| Unit tests | 181 (no infrastructure required), incl. timed adversarial-input regressions |
-| Integration tests | 26 (real Postgres + Redis, incl. failure recovery and index scheduling) |
+| Unit tests | 246 (no infrastructure required), incl. timed adversarial-input regressions |
+| Integration tests | 35 (real Postgres + Redis, incl. failure recovery, index scheduling, topic building, budget across workers) |
 | Type safety | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` |
 | Build step | none: Node runs the TypeScript sources directly |
 <!-- metrics:end -->
@@ -121,17 +137,21 @@ pnpm dev                      # server on :3000 + worker
 ```
 
 Then connect a GitHub App by following [docs/GITHUB_APP.md](docs/GITHUB_APP.md). Indexing
-needs the App's ID and private key in `.env`; without them, pushes are still ingested.
+needs the App's ID and private key in `.env`; without them, pushes are still ingested. For AI topic
+names, add `ANTHROPIC_API_KEY` (or `OLLAMA_MODEL` for a free local model); without either, topics
+get heuristic names.
 
 | Command | What it does |
 |---|---|
 | `pnpm test` | Unit tests |
 | `pnpm test:integration` | End-to-end against real Postgres + Redis (`pnpm infra:up` first) |
 | `pnpm lint` / `pnpm lint:fix` | Biome lint and format |
+| `pnpm check:text` | Reject invisible and control characters in tracked files (also in CI) |
 | `pnpm typecheck` | Strict TypeScript across all packages |
 | `pnpm db:generate` | Generate a migration after editing the schema |
 | `pnpm bench [n] [concurrency] [commits]` | Load-test a running server + worker |
 | `pnpm map:local <path>` | Index a local checkout and print modules, edges, dependencies |
+| `pnpm topics:local <path or owner/repo> [--describe]` | Print topics; `--describe` names them with Claude (uses `ANTHROPIC_API_KEY`, capped at $0.50 per run) |
 | `pnpm bench:index owner/repo …` | Index public GitHub repositories and report timings |
 
 ## Repository layout
@@ -144,7 +164,8 @@ packages/
   core/       Env validation, GitHub signature + payload parsing (pure, no I/O)
   db/         Drizzle schema, migrations, idempotent ingestion, snapshots
   github/     GitHub App client: JWT, installation tokens, repository reads, tarballs
-  indexer/    Tokenizers, import resolvers, module graph, sources, isolated thread
+  indexer/    Tokenizers, import resolvers, module graph, symbols, sources, isolated process
+  mapper/     Topic clustering (Louvain), stable ids, AI naming (Claude / Ollama) with budget
   queue/      Queue/worker factories, job types, health check
 tests/
   e2e/        Integration tests against real Postgres + Redis
@@ -157,8 +178,9 @@ docs/         Architecture, roadmap, GitHub App setup
 | Phase | Ships | Status |
 |---|---|---|
 | 0 · Foundation | Reliable GitHub ingestion | ✅ |
-| 1a · Indexer | Import graph, modules, dependencies, TODOs per repository | 🚧 |
-| 1b–d · Living map | Topic naming, interactive map, "where you left off" | 📋 |
+| 1a · Indexer | Import graph, modules, dependencies, TODOs per repository | ✅ |
+| 1b · Topics | Files grouped into named, summarised topics | 🚧 |
+| 1c–d · Living map | Interactive map, "where you left off" | 📋 |
 | 2 · Review | Per-push triage, nightly review, pattern memory | 📋 |
 | 3 · Life layer | Calendar, tasks, morning brief on WhatsApp/Telegram | 📋 |
 | 4 · Ecosystem | MCP server, works inside other agents | 📋 |

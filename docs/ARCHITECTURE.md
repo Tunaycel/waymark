@@ -31,7 +31,7 @@ flowchart TB
   end
 
   subgraph Engines["Engines"]
-    MAP["① Project Mapper<br/>indexer ✅ · topics · map 📋"]
+    MAP["① Project Mapper<br/>indexer ✅ · topics 🚧 · map 📋"]
     REV["② Review Engine<br/>triage + nightly review 📋"]
     PLAN["③ Life Planner<br/>calendar + tasks 📋"]
     SIG["Watch Engine<br/>signal scoring 📋"]
@@ -163,7 +163,7 @@ sequenceDiagram
   W->>GH: GET /commits/{branch} → head SHA
   W->>P: snapshot for (repo, SHA) exists? → done
   W->>GH: GET /tarball/{sha} (streamed)
-  W->>W: in a worker thread (time + heap budget):<br/>gunzip → untar → lex → resolve → graph
+  W->>W: in a child process (time + heap budget):<br/>gunzip → untar → lex → resolve → graph
   W->>P: BEGIN · snapshot · files · edges · prune to 3 · COMMIT
 ```
 
@@ -187,7 +187,7 @@ sequenceDiagram
 | **Own tokenizers instead of tree-sitter (for now)** | Imports are the only syntax the map needs. A tokenizer that understands comments, strings, templates, and regex literals finds them exactly and is pure TypeScript (no native or WASM build). Tree-sitter remains an option for richer symbols later. |
 | **Index the head at run time, not the pushed SHA** | Push jobs can be processed out of order. Resolving the default branch head when the job runs guarantees the newest commit is indexed last. |
 | **Per-repository debounce** | Pushes come in bursts (a rebase, several quick commits). One BullMQ deduplication key per repository: a push while the job waits replaces it and restarts the 15 s delay; a push while it runs is kept and starts right after (`keepLastIfActive`). At most one waiting and one running job per repository, so no push is lost and runs never overlap. |
-| **Indexing in a separate thread** | Repository content is untrusted and indexing is CPU-bound. In-process, one pathological file would block the event loop: no timeout could interrupt it and the queue lock could not be renewed, so the job would be re-run again and again. The tarball stream is transferred to a worker thread with a hard time budget (10 min) and heap budget (1.5 GB); exceeding either kills the thread and fails the job once. |
+| **Indexing in a separate process** | Repository content is untrusted and indexing is CPU-bound. In-process, one pathological file would block the event loop: no timeout could interrupt it and the queue lock could not be renewed, so the job would be re-run again and again. A worker thread is not enough either: when a thread hits its heap limit, V8 can abort the whole process (seen in our own tests). The tarball is piped to a forked child process with a hard time budget (10 min) and heap budget (1.5 GB); exceeding either kills only that process and fails the job once (stalled jobs retry at most once). |
 | **Snapshots keyed by (repository, commit)** | Retries, redeliveries, and concurrent workers converge on one row. The newest three are kept so changes between snapshots can be compared. |
 | **The repository is data, never code** | Nothing from the repository is executed or `require`d; symlinks, hard links, devices, and entries outside the archive's root folder are skipped; paths are normalised (no `..`, no absolute paths, ≤ 1,200 UTF-8 bytes); every size, depth, and count read from it is capped. |
 
@@ -201,7 +201,7 @@ sequenceDiagram
 | Hostile archives can't escape or exhaust | regular files under the archive's root folder only; path normalisation (≤ 1,200 UTF-8 bytes); per-file, total, and decompressed-byte caps that truncate instead of failing; stream destroyed on early exit | `sources.test.ts` |
 | Large repositories degrade, not fail | file-count and byte limits mark the snapshot `truncated` | `indexer.test.ts` |
 | A burst of pushes indexes once; a push during indexing is not lost | deduplication: replace while delayed, keep the newest while active | `indexing.test.ts` (real Redis) |
-| A pathological repository can't stall the worker | linear-time lexers, resolvers, and parsers (timed tests on adversarial input); indexing thread with hard time and heap budgets | `regressions.test.ts`, `isolated.test.ts` |
+| A pathological repository can't stall the worker | linear-time lexers, resolvers, and parsers (timed tests on adversarial input); indexing child process with hard time and heap budgets | `regressions.test.ts`, `isolated.test.ts` |
 | Text Postgres rejects never blocks a repository | NUL and unpaired surrogates are removed before writing; marker text is cut at code points | `indexing.test.ts` |
 | Concurrent or repeated indexing stores one snapshot | `UNIQUE (repository_id, commit_sha)` + `ON CONFLICT DO NOTHING`, existence check before download | `indexing.test.ts` |
 | Gone or empty repositories don't retry forever | 404/410/451 → unrecoverable; 409 (empty) → skipped | `indexing.test.ts` |
@@ -239,13 +239,89 @@ erDiagram
   }
 ```
 
-## 5. Engines (planned)
+## 5. Phase 1b: topics 🚧
+
+The index says *which files import which*. Topics turn that into map nodes people recognise:
+"Session Auth", "Stripe Webhooks", "Migration State Engine". Structure decides the groups for free
+and deterministically; an AI only names and summarises them, from structure, never from source code.
+
+```mermaid
+flowchart LR
+  S[("snapshot<br/>files · edges · symbols")] --> C["Cluster (isolated process)<br/>Louvain per package"]
+  C --> P["Shape<br/>attach isolated · merge small<br/>collect siblings · split large<br/>examples/fixtures as collections"]
+  P --> T["Attach tests<br/>to the code they import"]
+  T --> I["Stable ids<br/>Jaccard match with known topics"]
+  I --> R{"description still valid?<br/>≥ 70 % same files<br/>≤ 50 % changed content<br/>same model + prompt"}
+  R -->|yes| K["reuse (free)"]
+  R -->|no| D["describe in batches<br/>Claude Haiku 5.5 · Ollama<br/>within monthly budget"]
+  K & D --> DB[("snapshot_topics · edges<br/>repository_topics · llm_usage")]
+```
+
+### How a topic is formed
+
+| Step | What happens | Why |
+|---|---|---|
+| Package boundaries | Each workspace package (package.json, pyproject.toml, go.mod, Cargo.toml) is clustered on its own | Packages are units people already think in; a topic never mixes two |
+| Louvain | Modularity-maximising community detection on the undirected import graph, deterministic (fixed visit order, lowest-id tie-break) | Files that work together group together, even across directories |
+| Isolated files | Join the community that dominates their directory | Files without imports (configs in code, constants) still belong somewhere |
+| Size shaping | Communities under 5 files merge into the neighbour they import most; over 24 are re-clustered at higher resolution, then split by directory | A map node should be readable: neither a single file nor a 300-file blob |
+| Collections | Small sibling directories of one parent (`conf/locale/*`) and auxiliary trees (`examples/`, `fixtures/`, `benchmarks/`) become one topic each | Hundreds of near-identical instances are one idea, not hundreds of nodes |
+| Tests | Attached to the topic whose code they import most (same package only), else to their directory's topic | Tests are context for a topic, not a topic |
+| Heuristic label | Package name if the topic is the whole package, else its distinctive directory, else top TF-IDF keywords from paths and exported symbols | Works with no AI at all, and is the fallback whenever a description is unavailable |
+| Stable id | Greedy best-Jaccard match against every topic the repository has had | Small changes keep the same node on the map and the same paid description |
+
+### Naming with AI, at a predictable cost
+
+- **What is sent:** repository name, description, and README excerpt; per topic its package, directory,
+  file paths (≤ 40), exported symbols (≤ 40), external packages (≤ 10), neighbouring topics, and the
+  heuristic label. **No file contents.** Repository text is marked as data in the prompt; replies are
+  schema-validated, limited to the requested ids, and clipped (name ≤ 48, summary ≤ 280 characters).
+- **Model:** Claude Haiku 5.5 at low effort with structured outputs, 8 topics per request, 4 requests
+  in parallel. Ollama (local, free) is the alternative; with neither, heuristic labels are used.
+- **Budget:** `WAYMARK_LLM_MONTHLY_BUDGET_USD` (default $2) is a hard cap. All spending, across every
+  worker process, happens under one Postgres advisory lock; the `llm_usage` ledger is read once per run
+  and every request is checked synchronously against *spent + billed in this run + worst case of
+  requests in flight* (worst case = estimated input at a conservative bytes/3 tokens + full
+  `max_tokens`, at the long-context rate when it applies). Every billed call is recorded, including
+  refused, truncated, or malformed replies; a missing or invalid cost is charged at the worst case.
+  When the cap is reached, the remaining topics keep heuristic names and the next build picks them up.
+- **One build per repository at a time** (advisory lock), so a retried or duplicated job reuses the
+  descriptions the first one paid for instead of buying them again.
+- **Isolation:** clustering runs in a child process with time and heap budgets, like indexing, and
+  neither child receives secrets (API keys, database URL, the App key) in its environment.
+- **Reuse:** a description is paid for once and kept until its topic's files or content have really
+  changed, so a typical push costs nothing or one small request.
+
+### Guarantees
+
+| Property | Mechanism | Verified by |
+|---|---|---|
+| Every source and test file is in exactly one topic | partition steps only move whole files between groups | `topics.test.ts` |
+| Same snapshot, same topics | deterministic Louvain, sorted inputs, hashed keys | `topics.test.ts`, `louvain.test.ts` |
+| Topics stay inside packages; tests stay with their package | per-package clustering, same-package test votes | `topics.test.ts` |
+| Spending never exceeds the monthly cap | cross-process lock, single ledger read, in-flight reservations, worst-case charging of unknown costs | `describe.test.ts`, `topics.test.ts` (e2e, verified to fail without the lock) |
+| A duplicate or retried build pays for nothing | per-repository advisory lock; second build reuses the first one's descriptions | `topics.test.ts` (e2e) |
+| Clustering can't stall the worker | isolated child process; linear-time grouping (timed tests on star graphs, 50k-file directories, 300-level paths, 5,000 packages) | `topics.test.ts` |
+| Unchanged topics are not paid for again | Jaccard ≥ 0.7, ≤ 50 % changed blobs, same model and prompt version | `topics.test.ts` (e2e) |
+| A provider outage or refusal never fails indexing | describer errors are caught per batch; topic failures are logged, not thrown | `describe.test.ts`, `indexing.test.ts` |
+| Model output can't inject unbounded or foreign data | schema validation, requested ids only, clipped lengths; controls, bidi overrides, links, and markup removed | `describe.test.ts` |
+
+### Measured
+
+| Repository | Files | Topics | Clustering | Naming (Haiku 5.5) | Cost |
+|---|---:|---:|---:|---:|---:|
+| this repository | 133 | 14 | 9 ms | 6 s (2 requests) | $0.0016 |
+| fastify/fastify | 392 | 8 | 9 ms | 8 s | $0.0011 |
+| django/django | 7,028 | 149 | 67 ms | 25 s (22 requests) | $0.019 |
+| vercel/next.js | 33,708 | 875 | 4.0 s | ~3 min | ~$0.12 |
+
+Costs are for the first build. Later builds re-describe only topics that changed.
+
+## 6. Engines (planned)
 
 ### ① Project Mapper: from index to living map (Phases 1b–1d)
-- **Topic grouping (1b):** an LLM names and summarises the modules from the index ("Auth",
-  "Payments", "Editor UI"), splitting or merging them where the directory layout misleads.
-- **Incremental update:** each new snapshot is compared with the previous one by blob SHA; only
-  topics with changed files are re-summarised. The repository is never re-read wholesale.
+- **Topics (1b):** see section 5.
+- **Dashboard (1c):** an interactive map of packages → topics → files, with recent changes highlighted.
 - **"Where you left off" (1d):** recently touched topics, open branches, unfinished PRs, new
   TODO/FIXME, WIP commits, and the next roadmap milestone.
 
@@ -265,11 +341,13 @@ erDiagram
 - Hard limits: watches **observe and remind**. They never move money, and regulatory alerts always
   link to the official source and are not legal advice.
 
-## 6. Security and privacy model
+## 7. Security and privacy model
 
 - GitHub App with minimum permissions: `metadata:read`, `contents:read` (plus `pull_requests:write`
   only if the user enables fix-PR suggestions).
 - Webhook secret ≥ 16 chars, enforced at startup.
+- AI providers receive structure only (paths, exported names, package names, README excerpts),
+  never file contents; spending is capped per month; Ollama keeps everything on the machine.
 - Store structure and summaries, not source code: snapshots hold paths, languages, line counts,
   hashes, imports, and comment markers, never file contents. Drop data the product doesn't use.
 - Self-hostable end to end; local-model support is planned for users who keep everything on their

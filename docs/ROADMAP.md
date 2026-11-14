@@ -6,8 +6,8 @@ maintainer has reviewed the previous one.
 | Phase | Scope | Outcome | Status |
 |---|---|---|---|
 | **0 · Foundation** | Monorepo, CI, Postgres + Redis, GitHub webhook → queue → worker → DB | Every push is captured reliably and idempotently | ✅ merged |
-| **1a · Indexer** | Tarball download via the GitHub App, JS/TS · Python · Go import graph, modules, dependencies, frameworks, TODO markers, snapshots; debounced re-index on push, initial index on install | The structural map data exists for every repository | 🚧 in review |
-| **1b · Topic grouping** | LLM groups files into named topics and summarises them; only changed topics are re-summarised (blob SHAs) | Map nodes people recognise ("Auth", "Payments") | 📋 |
+| **1a · Indexer** | Tarball download via the GitHub App, JS/TS · Python · Go import graph, modules, dependencies, frameworks, TODO markers, snapshots; debounced re-index on push, initial index on install | The structural map data exists for every repository | ✅ merged |
+| **1b · Topics** | Louvain clustering into topics with stable ids; Claude Haiku 5.5 (or Ollama) names and summarises them under a monthly budget; descriptions reused until a topic changes | Map nodes people recognise ("Session Auth", "Stripe Webhooks") | 🚧 in review |
 | **1c · Dashboard** | Next.js + React Flow interactive map, recent-change highlights | First public demo | 📋 |
 | **1d · Where you left off** | Recently touched topics, open branches and PRs, new TODOs, WIP commits | Answers "where was I?" | 📋 |
 | **2 · Review** | Per-push triage, nightly review, pattern memory, email/Telegram delivery | End-of-day report | 📋 |
