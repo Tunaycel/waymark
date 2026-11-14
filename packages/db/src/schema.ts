@@ -1,4 +1,4 @@
-import type { RepoIndex } from '@waymark/indexer';
+import type { FileKind, RepoIndex } from '@waymark/indexer';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -6,6 +6,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -98,6 +99,8 @@ export const repoSnapshots = pgTable(
     /** A size limit stopped indexing early; the map is partial. */
     truncated: boolean('truncated').notNull(),
     summary: jsonb('summary').$type<SnapshotSummary>().notNull(),
+    /** When topics were last built for this snapshot; `null` until the first build. */
+    topicsBuiltAt: timestamp('topics_built_at', { withTimezone: true }),
   },
   (t) => [
     uniqueIndex('repo_snapshots_repository_sha_key').on(t.repositoryId, t.commitSha),
@@ -113,12 +116,18 @@ export const snapshotFiles = pgTable(
       .references(() => repoSnapshots.id, { onDelete: 'cascade' }),
     path: text('path').notNull(),
     language: text('language'),
-    kind: text('kind').notNull(),
+    kind: text('kind').$type<FileKind>().notNull(),
     module: text('module').notNull(),
     size: integer('size').notNull(),
     lines: integer('lines'),
     /** Git blob SHA: compare with the next snapshot to find changed files without diffing content. */
     blobSha: text('blob_sha'),
+    /** Exported functions, classes, and types. */
+    symbols: jsonb('symbols').$type<string[]>().notNull().default([]),
+    /** External packages the file imports. */
+    externals: jsonb('externals').$type<string[]>().notNull().default([]),
+    /** Stable id of the topic the file belongs to (set when topics are built). */
+    topicId: text('topic_id'),
   },
   (t) => [primaryKey({ columns: [t.snapshotId, t.path] })],
 );
@@ -134,6 +143,91 @@ export const snapshotEdges = pgTable(
     toPath: text('to_path').notNull(),
   },
   (t) => [primaryKey({ columns: [t.snapshotId, t.fromPath, t.toPath] })],
+);
+
+/** A topic of one snapshot: the node the map draws. */
+export const snapshotTopics = pgTable(
+  'snapshot_topics',
+  {
+    snapshotId: uuid('snapshot_id')
+      .notNull()
+      .references(() => repoSnapshots.id, { onDelete: 'cascade' }),
+    /** Stable across snapshots (see repository_topics). */
+    topicId: text('topic_id').notNull(),
+    package: text('package').notNull(),
+    directory: text('directory').notNull(),
+    /** AI name when available, else the heuristic label. */
+    name: text('name').notNull(),
+    summary: text('summary'),
+    role: text('role'),
+    /** Where `name` came from: `ai` or `heuristic`. */
+    source: text('source').notNull(),
+    label: text('label').notNull(),
+    fileCount: integer('file_count').notNull(),
+    testCount: integer('test_count').notNull(),
+    lineCount: integer('line_count').notNull(),
+    languages: jsonb('languages').$type<Record<string, number>>().notNull(),
+    keywords: jsonb('keywords').$type<string[]>().notNull(),
+    externals: jsonb('externals').$type<string[]>().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.snapshotId, t.topicId] })],
+);
+
+/** Imports between topics of a snapshot. */
+export const snapshotTopicEdges = pgTable(
+  'snapshot_topic_edges',
+  {
+    snapshotId: uuid('snapshot_id')
+      .notNull()
+      .references(() => repoSnapshots.id, { onDelete: 'cascade' }),
+    fromTopic: text('from_topic').notNull(),
+    toTopic: text('to_topic').notNull(),
+    weight: integer('weight').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.snapshotId, t.fromTopic, t.toTopic] })],
+);
+
+/**
+ * Every topic a repository has had, across snapshots: the memory that keeps topic ids stable and
+ * lets an AI description be reused until the topic actually changes.
+ */
+export const repositoryTopics = pgTable(
+  'repository_topics',
+  {
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    topicId: text('topic_id').notNull(),
+    /** Current member paths. */
+    members: jsonb('members').$type<string[]>().notNull(),
+    name: text('name'),
+    summary: text('summary'),
+    role: text('role'),
+    provider: text('provider'),
+    model: text('model'),
+    promptVersion: integer('prompt_version'),
+    /** Members and their blob SHAs when the description was written: the baseline for "changed". */
+    describedBlobs: jsonb('described_blobs').$type<Record<string, string | null>>(),
+    describedAt: timestamp('described_at', { withTimezone: true }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.repositoryId, t.topicId] })],
+);
+
+/** Every paid (or local) model call, for the monthly budget and for transparency. */
+export const llmUsage = pgTable(
+  'llm_usage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'set null' }),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    inputTokens: integer('input_tokens').notNull(),
+    outputTokens: integer('output_tokens').notNull(),
+    costUsd: numeric('cost_usd', { precision: 12, scale: 6, mode: 'number' }).notNull(),
+  },
+  (t) => [index('llm_usage_created_at_idx').on(t.createdAt)],
 );
 
 export type Repository = typeof repositories.$inferSelect;
