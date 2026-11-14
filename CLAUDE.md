@@ -31,11 +31,13 @@ pnpm dev                 # server + worker with --watch
 pnpm lint                # Biome (lint + format check); pnpm lint:fix to apply
 pnpm typecheck           # tsc in every package
 pnpm test                # unit tests (no infrastructure needed)
-pnpm test:integration    # real Postgres + Redis; requires infra:up
+pnpm test:integration    # real Postgres + Redis (own waymark_test DB, never the .env one); requires infra:up
 pnpm db:generate         # after editing packages/db/src/schema.ts — commit the generated SQL
 pnpm map:local <path>    # index a local checkout and print modules, edges, dependencies
 pnpm topics:local <path|owner/repo> [--describe]   # topics; --describe calls Claude (costs money)
 pnpm bench               # webhook load test (needs a running server + worker)
+pnpm demo <path|o/r> [--describe]   # seed the local DB for the dashboard (no GitHub App)
+pnpm web                 # dashboard on http://127.0.0.1:3100
 pnpm bench:index o/r …   # index public GitHub repositories and report timings
 ```
 

@@ -239,7 +239,7 @@ erDiagram
   }
 ```
 
-## 5. Phase 1b: topics 🚧
+## 5. Phase 1b: topics ✅
 
 The index says *which files import which*. Topics turn that into map nodes people recognise:
 "Session Auth", "Stripe Webhooks", "Migration State Engine". Structure decides the groups for free
@@ -317,11 +317,70 @@ flowchart LR
 
 Costs are for the first build. Later builds re-describe only topics that changed.
 
-## 6. Engines (planned)
+## 6. Phase 1c: the dashboard 🚧
+
+A local web app (`apps/web`, Next.js 16 App Router) that reads the same Postgres the worker
+writes. Pages are server components that query `packages/db/src/dashboard.ts` directly; the map
+itself is a client component (React Flow 12, ELK layered layout). It binds to `127.0.0.1` and has no
+authentication yet, so it is for your own machine only; hosted access comes with sign-in later.
+
+```mermaid
+flowchart LR
+  DB[("Postgres")] --> RM["dashboard.ts<br/>latest snapshot with topics<br/>+ commits of the last 30 days"]
+  RM --> P["Server component<br/>serialises one RepositoryMap"]
+  P --> G["graph.ts (pure)<br/>regions · groups · collapse<br/>edge aggregation + pruning"]
+  G --> L["layout.ts<br/>ELK layered, left → right"]
+  L --> RF["React Flow canvas<br/>focus · search · panel"]
+  RF -->|"topic click"| API["/api/topic<br/>files · TODOs · commits"]
+  API --> DB
+```
+
+### Keeping a 900-topic map readable
+
+| Problem | Rule | Where |
+|---|---|---|
+| A package with 150 topics is one blob | Packages over 24 topics are split by directory; a level every topic shares is skipped; areas still over 24 are split one level deeper | `regions()` |
+| A monorepo has hundreds of packages and fixtures | Over 32 regions, regions are grouped by the finest directory level that keeps ≤ 32 entries, recursively; siblings no directory separates are cut into about √n alphabetical ranges ("k00 … k06"), so no expansion ever shows more than 32 entries | `regionEntries()` · `bucket()` |
+| Laying out everything freezes the tab | ELK runs on the main thread (~4 s for 300 nodes on next.js), so "Expand all" becomes "Expand a level" above 300 topics and stops when the next level would exceed 250 nodes; clicking a region or searching still opens anything | `expandOneLevel()` · `MAX_VISIBLE_NODES` |
+| The first view of a big repository | Over 60 topics, every group and every region with more than two topics starts collapsed; a collapsed node shows its topic, file, and TODO counts and when it last changed | `initialCollapsed()` |
+| 2,000 import edges are a hairball | Edges are summed onto whatever is visible (a collapsed region is one endpoint) and pruned to each node's 3 strongest; the selected topic always shows all of its edges | `visibleGraph()` · `pruneEdges()` |
+| Finding one topic among 900 | Search ranks name prefix > name substring > directory or summary; choosing a result expands its group path, re-lays out, and centres on it | `searchTopics()` · `containersOfTopic()` |
+
+Region and group ids are built from URI-encoded path parts (`p:<pkg>/a:<area>`, `g:<dir>`), so no directory name can make two of them collide; the layout drops duplicate or dangling input instead of failing, and a failed layout shows a retry instead of a blank canvas.
+
+### Safety of a local, sign-in-free dashboard
+
+- **Bind:** `127.0.0.1` only. **DNS rebinding:** `src/proxy.ts` refuses any request whose `Host` is not a loopback name, so a web page you visit cannot read the dashboard through a domain that resolves to your machine.
+- **Least privilege:** the web process loads only `DATABASE_URL` from `.env`; API keys and the GitHub App key never enter it. All its queries are reads.
+- **Inputs:** route names with control characters are 404s; `/api/topic` takes two uuids and a short id (zod), and answers 404 when the snapshot does not belong to the repository.
+- **Recent activity** is mapped to topics inside Postgres (path lookups by primary key, indexed by `commits(repository_id, ingested_at)` and `snapshot_files(snapshot_id, topic_id)`), so a commit that touched 3,000 files costs one query, not 3,000 paths shipped to the app.
+
+"Live" (changed in the last 24 h) and "this week" come from commits the worker ingested in the last
+30 days, mapped to topics through `snapshot_files.topic_id`; nothing is recomputed in the browser.
+
+### Measured
+
+Local dashboard against the databases seeded by `pnpm demo` (same laptop as above; data load is the
+`repositoryMap` query, graph and layout are the browser's work on the first view):
+
+| Repository | Topics | Import edges | First view | Data load | Graph | Layout (ELK) |
+|---|---:|---:|---:|---:|---:|---:|
+| this repository | 17 | 35 | 21 nodes · 25 edges | 17 ms | 0.2 ms | 69 ms |
+| django/django | 150 | 1,560 | 38 nodes · 77 edges | 12 ms | 1.3 ms | 109 ms |
+| vercel/next.js | 911 | 2,613 | 16 nodes · 25 edges | 85 ms | 8.5 ms | 30 ms |
+
+Graph logic is pure and unit-tested (`graph.test.ts`: every topic in exactly one region, ≤ 32
+entries at every level up to 1,500 sibling packages, id collisions, collapsed-edge aggregation,
+search ranking); `layout.test.ts` checks children stay inside their region, dependencies flow left
+to right, and malformed input is laid out instead of throwing. The read models are tested against
+Postgres in `tests/e2e/src/dashboard.test.ts` (snapshot choice, 30-day window, case-insensitive
+lookup, a 3,000-file commit, foreign snapshots).
+
+## 7. Engines (planned)
 
 ### ① Project Mapper: from index to living map (Phases 1b–1d)
 - **Topics (1b):** see section 5.
-- **Dashboard (1c):** an interactive map of packages → topics → files, with recent changes highlighted.
+- **Dashboard (1c):** see section 6.
 - **"Where you left off" (1d):** recently touched topics, open branches, unfinished PRs, new
   TODO/FIXME, WIP commits, and the next roadmap milestone.
 
@@ -341,7 +400,7 @@ Costs are for the first build. Later builds re-describe only topics that changed
 - Hard limits: watches **observe and remind**. They never move money, and regulatory alerts always
   link to the official source and are not legal advice.
 
-## 7. Security and privacy model
+## 8. Security and privacy model
 
 - GitHub App with minimum permissions: `metadata:read`, `contents:read` (plus `pull_requests:write`
   only if the user enables fix-PR suggestions).

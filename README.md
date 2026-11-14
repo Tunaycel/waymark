@@ -8,7 +8,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 ![Node ≥ 22.18](https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
-![Status](https://img.shields.io/badge/status-phase%201b%20%C2%B7%20topics-orange)
+![Status](https://img.shields.io/badge/status-phase%201c%20%C2%B7%20map-orange)
 
 </div>
 
@@ -23,9 +23,9 @@ It is built to grow beyond code: calendar, tasks, mail, and anything else you as
 your morning brief covers your whole day, not just your repositories.
 
 > [!NOTE]
-> Waymark is in **Phase 1b**: every repository is ingested, structurally indexed, and grouped into
-> named topics ("Session Auth", "Stripe Webhooks") with short summaries. The interactive map and
-> briefs are next. See the [roadmap](docs/ROADMAP.md).
+> Waymark is in **Phase 1c**: every repository is ingested, indexed, grouped into named topics
+> ("Session Auth", "Stripe Webhooks"), and shown as an interactive map in a local dashboard.
+> "Where you left off" and the daily briefs are next. See the [roadmap](docs/ROADMAP.md).
 
 ## How it works
 
@@ -39,7 +39,7 @@ flowchart LR
   W -->|"default branch:<br/>debounced"| IX["Indexer process<br/>tarball → import graph"]
   IX --> TP["Topics<br/>cluster · name (Claude Haiku / Ollama)"]
   TP --> DB
-  DB -.-> M["Living map<br/>(Phase 1c–d)"]
+  DB --> M["Living map<br/>dashboard (1c)"]
   DB -.-> R["Nightly review<br/>(Phase 2)"]
   DB -.-> B["Morning brief<br/>(Phase 3)"]
 ```
@@ -48,6 +48,27 @@ GitHub gives a webhook receiver **10 seconds** before it marks the delivery fail
 does only the cheap, safety-critical work (signature check, validation, enqueue) and answers
 immediately; everything slow happens in workers that retry on failure. The full design, with the
 reasoning behind each decision, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## The map
+
+<!-- screenshots -->
+<p align="center">
+  <img src="docs/images/map-django.png" alt="django/django: 150 AI-named topics grouped by directory, live import edges" width="100%">
+</p>
+
+| | |
+|---|---|
+| <img src="docs/images/projects.png" alt="Project list with weekly activity and TODO counts"> | <img src="docs/images/topic-panel.png" alt="Topic panel: AI summary, dependencies, TODOs, recent commits, files"> |
+
+Each project is a map: topics are nodes, imports are edges, and topics changed in the last day or
+week glow. Large repositories open as a handful of regions (packages, or directories inside one)
+and expand on click; search (Ctrl K) jumps to any topic and opens what is around it. The side
+panel shows a topic's summary, what it uses and what uses it, its TODOs, recent commits, and files.
+
+```bash
+pnpm demo .                     # map this checkout (or any local path / owner/repo)
+pnpm web                        # http://127.0.0.1:3100
+```
 
 ## Engineering guarantees
 
@@ -69,6 +90,8 @@ Each guarantee below is enforced in code **and** pinned by a test.
 | AI spend never exceeds the monthly cap | One Postgres lock for all spending across workers; every billed call recorded (also refused or malformed ones); unknown costs charged at the worst case; unchanged topics reuse their paid description | [`describe.test.ts`](packages/mapper/src/describe/describe.test.ts) · [`topics.test.ts`](tests/e2e/src/topics.test.ts) |
 | Topics are deterministic and stable | Deterministic Louvain within package boundaries; ids carried over by file overlap, so small changes keep the same map node | [`topics.test.ts`](packages/mapper/src/topics.test.ts) |
 | Repository content is data, never code | Nothing is executed; symlinks and paths outside the archive root are skipped; text Postgres rejects (NUL, broken surrogates) is cleaned | [`sources.test.ts`](packages/indexer/src/sources/sources.test.ts) · `indexing.test.ts` |
+| Other websites can't read the local dashboard | Loopback-only bind plus a `Host` check against DNS rebinding; the web process gets `DATABASE_URL` and no API keys; a topic panel only answers for a snapshot of the repository asked for | [`paths.test.ts`](apps/web/src/lib/paths.test.ts) · [`dashboard.test.ts`](tests/e2e/src/dashboard.test.ts) |
+| Tests never touch your data | Integration tests run in their own `<db>_test` database and refuse any database not named `*_test` | [`helpers.ts`](tests/e2e/src/helpers.ts) |
 | Misconfiguration fails at startup, all at once | zod-validated environment, every problem reported together | [`env.test.ts`](packages/core/src/env.test.ts) |
 
 ## Metrics
@@ -115,10 +138,19 @@ Example names from this repository: *Fastify Server*, *Import Path Resolution*, 
 Indexing*, *GitHub App Client*, *Louvain Topic Clustering*.
 Throughput is 2.5k–8.9k files/s on one core; next.js peaks at +228 MB RSS.
 
+**Dashboard**, first view of each map (data load from Postgres, then grouping and ELK layout in the
+browser):
+
+| Repository | Topics | Import edges | First view | Data load | Layout |
+|---|---:|---:|---:|---:|---:|
+| this repository | 17 | 35 | 21 nodes | 17 ms | 69 ms |
+| django/django | 150 | 1,560 | 38 nodes | 12 ms | 109 ms |
+| vercel/next.js | 911 | 2,613 | 16 nodes | 85 ms | 30 ms |
+
 | Quality gate | Value |
 |---|---|
-| Unit tests | 246 (no infrastructure required), incl. timed adversarial-input regressions |
-| Integration tests | 35 (real Postgres + Redis, incl. failure recovery, index scheduling, topic building, budget across workers) |
+| Unit tests | 276 (no infrastructure required), incl. timed adversarial-input regressions |
+| Integration tests | 40 (real Postgres + Redis, in a separate `<db>_test` database; incl. failure recovery, index scheduling, topic building, budget across workers, dashboard read models) |
 | Type safety | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` |
 | Build step | none: Node runs the TypeScript sources directly |
 <!-- metrics:end -->
@@ -153,11 +185,14 @@ get heuristic names.
 | `pnpm map:local <path>` | Index a local checkout and print modules, edges, dependencies |
 | `pnpm topics:local <path or owner/repo> [--describe]` | Print topics; `--describe` names them with Claude (uses `ANTHROPIC_API_KEY`, capped at $0.50 per run) |
 | `pnpm bench:index owner/repo …` | Index public GitHub repositories and report timings |
+| `pnpm demo <path or owner/repo> [--describe]` | Index a repository into the local database for the dashboard, without the GitHub App |
+| `pnpm web` | Dashboard on http://127.0.0.1:3100 (local only, no authentication) |
 
 ## Repository layout
 
 ```text
 apps/
+  web/        Next.js dashboard: project list, interactive map (React Flow + ELK), topic panel
   server/     Fastify webhook receiver: verify → normalize → enqueue
   worker/     BullMQ consumer: persists events
 packages/
@@ -169,7 +204,7 @@ packages/
   queue/      Queue/worker factories, job types, health check
 tests/
   e2e/        Integration tests against real Postgres + Redis
-scripts/      Webhook load test and indexer benchmark
+scripts/      Webhook load test, indexer benchmark, demo seeding
 docs/         Architecture, roadmap, GitHub App setup
 ```
 
@@ -179,8 +214,9 @@ docs/         Architecture, roadmap, GitHub App setup
 |---|---|---|
 | 0 · Foundation | Reliable GitHub ingestion | ✅ |
 | 1a · Indexer | Import graph, modules, dependencies, TODOs per repository | ✅ |
-| 1b · Topics | Files grouped into named, summarised topics | 🚧 |
-| 1c–d · Living map | Interactive map, "where you left off" | 📋 |
+| 1b · Topics | Files grouped into named, summarised topics | ✅ |
+| 1c · Living map | Local dashboard with an interactive map of every project | 🚧 |
+| 1d · Where you left off | Recently touched topics, open branches, new TODOs | 📋 |
 | 2 · Review | Per-push triage, nightly review, pattern memory | 📋 |
 | 3 · Life layer | Calendar, tasks, morning brief on WhatsApp/Telegram | 📋 |
 | 4 · Ecosystem | MCP server, works inside other agents | 📋 |
