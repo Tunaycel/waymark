@@ -290,3 +290,19 @@ describe('break-it pass: monorepos and determinism', () => {
     expect(index.stats.markersTruncated).toBe(true);
   });
 });
+
+describe('markers vs prose about markers', () => {
+  it('does not count "TODO/FIXME" or "TODO-list" mentions, but keeps real markers', () => {
+    const found = markersFromComments('a.ts', [
+      { text: ' TODO/FIXME markers per topic', line: 1 },
+      { text: ' see the TODO-list in the README', line: 2 },
+      { text: ' TODO: real one', line: 3 },
+      { text: ' FIXME - also real', line: 4 },
+      { text: ' TODO-1234: ticket-style marker', line: 5 },
+      { text: ' BUG-4521 crash on empty input', line: 6 },
+    ]);
+    expect(found.map((m) => m.line)).toEqual([3, 4, 5, 6]);
+    // The ticket number is part of the marker's text.
+    expect(found[2]?.text).toBe('1234: ticket-style marker');
+  });
+});
