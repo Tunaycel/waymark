@@ -42,10 +42,13 @@ const STDERR_TAIL = 4_096;
  * The environment a child gets: enough for Node to run, nothing secret. It processes untrusted
  * repository content, so it must not hold API keys, database URLs, or the GitHub App key.
  */
-export function minimalChildEnv(): NodeJS.ProcessEnv {
+export function minimalChildEnv(): Record<string, string> {
   const keep = ['PATH', 'Path', 'SYSTEMROOT', 'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'TZ'];
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of keep) if (process.env[key] !== undefined) env[key] = process.env[key];
+  const env: Record<string, string> = {};
+  for (const key of keep) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
   return env;
 }
 
@@ -66,7 +69,7 @@ export function runIsolated<T>(entry: URL, options: IsolationOptions): Promise<T
     execArgv: [`--max-old-space-size=${options.maxHeapMb}`],
     serialization: 'advanced',
     stdio: ['pipe', 'ignore', 'pipe', 'ipc'],
-    env: minimalChildEnv(),
+    env: minimalChildEnv() as NodeJS.ProcessEnv,
   });
 
   let stderr = '';

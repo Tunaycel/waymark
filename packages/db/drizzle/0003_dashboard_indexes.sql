@@ -1,0 +1,2 @@
+CREATE INDEX "commits_repository_ingested_at_idx" ON "commits" USING btree ("repository_id","ingested_at" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX "snapshot_files_topic_idx" ON "snapshot_files" USING btree ("snapshot_id","topic_id");

@@ -1,4 +1,16 @@
 export { createDatabase, type Database, type DatabaseHandle } from './client.ts';
+export {
+  ACTIVITY_WINDOW_DAYS,
+  findRepository,
+  listRepositoryCards,
+  type MapTopic,
+  type RecentCommit,
+  type RepositoryCard,
+  type RepositoryMap,
+  repositoryMap,
+  type TopicDetail,
+  topicDetail,
+} from './dashboard.ts';
 export { type IngestResult, ingestPush } from './ingest.ts';
 export { migrationsFolder, runMigrations } from './migrate.ts';
 export * from './schema.ts';
