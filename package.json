@@ -22,7 +22,9 @@
     "infra:down": "docker compose down",
     "bench": "pnpm --filter @waymark/scripts bench",
     "map:local": "pnpm --filter @waymark/indexer map",
-    "bench:index": "pnpm --filter @waymark/scripts bench:index"
+    "bench:index": "pnpm --filter @waymark/scripts bench:index",
+    "topics:local": "pnpm --filter @waymark/mapper topics",
+    "check:text": "node scripts/check-text.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",
