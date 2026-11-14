@@ -9,6 +9,7 @@
     "@waymark/db": "workspace:*",
     "@waymark/github": "workspace:*",
     "@waymark/indexer": "workspace:*",
+    "@waymark/mapper": "workspace:*",
     "@waymark/queue": "workspace:*",
     "pino": "^10.4.0"
   },
@@ -20,6 +21,7 @@
   },
   "exports": {
     ".": "./src/processor.ts",
-    "./indexing": "./src/indexing.ts"
+    "./indexing": "./src/indexing.ts",
+    "./topics": "./src/topics.ts"
   }
 }

@@ -14,6 +14,7 @@
     "@waymark/db": "workspace:*",
     "@waymark/github": "workspace:*",
     "@waymark/indexer": "workspace:*",
+    "@waymark/mapper": "workspace:*",
     "@waymark/queue": "workspace:*",
     "@waymark/server": "workspace:*",
     "@waymark/worker": "workspace:*",
