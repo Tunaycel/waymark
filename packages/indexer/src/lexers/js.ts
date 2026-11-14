@@ -1,3 +1,4 @@
+import { SymbolCollector } from '../symbols.ts';
 import type { Comment, RawImport, ScanResult } from '../types.ts';
 
 /**
@@ -21,6 +22,9 @@ interface Token {
 }
 
 const CONTROL_KEYWORDS = new Set(['if', 'while', 'for', 'with']);
+
+/** Byte-order mark, built at run time so the source contains no invisible character. */
+const BOM = String.fromCharCode(0xfeff);
 
 /** After these keywords a `/` starts a regular expression, not a division. */
 const EXPRESSION_KEYWORDS = new Set([
@@ -124,7 +128,7 @@ function tokenize(src: string, lineOffset: number): { tokens: Token[]; comments:
       i++;
       continue;
     }
-    if (c === ' ' || c === '\t' || c === '\r' || c === '\f' || c === '\v' || c === '﻿') {
+    if (c === ' ' || c === '\t' || c === '\r' || c === '\f' || c === '\v' || c === BOM) {
       i++;
       continue;
     }
@@ -344,17 +348,64 @@ function extract(tokens: Token[]): RawImport[] {
   return imports;
 }
 
+const DECLARATION_MODIFIERS = new Set(['default', 'async', 'declare', 'abstract']);
+const DECLARATIONS = new Set([
+  'function',
+  'class',
+  'const',
+  'let',
+  'var',
+  'interface',
+  'type',
+  'enum',
+  'namespace',
+]);
+
+/** `export function f`, `export default class C`, `export { a, b }`, `exports.x =`. */
+function exportedSymbols(tokens: Token[]): string[] {
+  const out = new SymbolCollector();
+  for (let i = 0; i < tokens.length && !out.full; i++) {
+    const t = tokens[i] as Token;
+    if (t.kind !== 'id') continue;
+    if (t.value === 'export' && !isPunc(tokens[i - 1], '.')) {
+      let j = i + 1;
+      while (isId(tokens[j]) && DECLARATION_MODIFIERS.has(tokens[j]?.value as string)) j++;
+      const keyword = tokens[j];
+      if (isId(keyword) && DECLARATIONS.has(keyword?.value as string)) {
+        let k = j + 1;
+        if (isPunc(tokens[k], '*')) k++; // generator
+        if (isId(tokens[k])) out.add(tokens[k]?.value);
+      } else if (isPunc(keyword, '{') && findFrom(tokens, j) === -1) {
+        // Local export list: `export { a, b as c }` exposes the public names.
+        for (let k = j + 1; k < tokens.length && !isPunc(tokens[k], '}'); k++) {
+          const name = tokens[k];
+          const after = tokens[k + 1];
+          if (!isId(name) || name?.value === 'type' || name?.value === 'as') continue;
+          if (isId(after, 'as')) continue; // the public name follows `as`
+          out.add(name?.value);
+        }
+      }
+    } else if (t.value === 'exports' && isPunc(tokens[i + 1], '.') && isPunc(tokens[i + 3], '=')) {
+      out.add(tokens[i + 2]?.value); // CommonJS `exports.name =`
+    }
+  }
+  return out.symbols;
+}
+
 export function scanJavaScript(src: string, lineOffset = 0): ScanResult {
   const { tokens, comments } = tokenize(src, lineOffset);
-  return { imports: extract(tokens), comments };
+  return { imports: extract(tokens), comments, symbols: exportedSymbols(tokens) };
 }
 
 /** Vue / Svelte single-file components and Astro pages: scans the embedded script blocks. */
 export function scanComponent(src: string): ScanResult {
-  const result: ScanResult = { imports: [], comments: [] };
+  const result: ScanResult = { imports: [], comments: [], symbols: [] };
   const merge = (part: ScanResult) => {
     for (const item of part.imports) result.imports.push(item);
     for (const item of part.comments) result.comments.push(item);
+    for (const item of part.symbols) {
+      if (result.symbols.length < 30 && !result.symbols.includes(item)) result.symbols.push(item);
+    }
   };
 
   // Astro component script lives in a `---` fenced frontmatter block at the top.

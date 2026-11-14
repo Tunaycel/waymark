@@ -3,7 +3,11 @@ export {
   IndexCrashedError,
   IndexTimeoutError,
   type IsolatedIndexOptions,
-  indexInThread,
+  type IsolationOptions,
+  indexIsolated,
+  minimalChildEnv,
+  runIsolated,
+  serveIsolated,
 } from './isolated.ts';
 export { classify, detectLanguage, isIgnoredPath } from './languages.ts';
 export { scanGo } from './lexers/go.ts';

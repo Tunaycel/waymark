@@ -1,3 +1,4 @@
+import { isGoExported, SymbolCollector } from '../symbols.ts';
 import type { Comment, RawImport, ScanResult } from '../types.ts';
 
 type Token = { kind: 'id' | 'str' | 'punc'; value: string; line: number };
@@ -104,5 +105,23 @@ export function scanGo(src: string): ScanResult {
     const spec = next?.kind === 'str' ? next : tokens[k + 2];
     if (spec?.kind === 'str') imports.push({ specifier: spec.value, line: spec.line });
   }
-  return { imports, comments };
+  // Exported functions, methods (`func (r *T) Name(`), and types.
+  const symbols = new SymbolCollector();
+  for (let k = 0; k < tokens.length && !symbols.full; k++) {
+    const t = tokens[k] as Token;
+    if (t.kind !== 'id') continue;
+    let name: Token | undefined;
+    if (t.value === 'type') name = tokens[k + 1];
+    else if (t.value === 'func') {
+      let j = k + 1;
+      if (tokens[j]?.kind === 'punc' && tokens[j]?.value === '(') {
+        // Skip the receiver list.
+        while (j < tokens.length && !(tokens[j]?.kind === 'punc' && tokens[j]?.value === ')')) j++;
+        j++;
+      }
+      name = tokens[j];
+    }
+    if (name?.kind === 'id' && isGoExported(name.value)) symbols.add(name.value);
+  }
+  return { imports, comments, symbols: symbols.symbols };
 }

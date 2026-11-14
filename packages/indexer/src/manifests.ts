@@ -34,6 +34,11 @@ const record = (value: unknown): Record<string, unknown> =>
     : {};
 const keys = (value: unknown) => Object.keys(record(value)).sort();
 const str = (value: unknown) => (typeof value === 'string' ? value : null);
+/** A one-line description: trimmed, whitespace collapsed, at most 200 characters. */
+const oneLine = (value: unknown) => {
+  const text = str(value)?.replace(/\s+/g, ' ').trim();
+  return text ? Array.from(text).slice(0, 200).join('') : null;
+};
 
 /** PEP 508 requirement → distribution name (`requests[socks]>=2; python_version>"3"` → `requests`). */
 export function pep508Name(requirement: string): string | null {
@@ -46,6 +51,7 @@ function manifest(path: string, ecosystem: Ecosystem, fields: Partial<Manifest>)
     path,
     ecosystem,
     name: fields.name ?? null,
+    description: fields.description ?? null,
     dependencies: fields.dependencies ?? [],
     devDependencies: fields.devDependencies ?? [],
     scripts: fields.scripts ?? [],
@@ -62,6 +68,7 @@ export function parseManifest(path: string, text: string): ParsedManifest | null
       const parsed: ParsedManifest = {
         manifest: manifest(path, 'npm', {
           name: pkgName,
+          description: oneLine(json.description),
           dependencies: [...new Set([...keys(json.dependencies), ...keys(json.peerDependencies)])],
           devDependencies: keys(json.devDependencies),
           scripts: keys(json.scripts),
@@ -99,6 +106,7 @@ export function parseManifest(path: string, text: string): ParsedManifest | null
       return {
         manifest: manifest(path, 'pypi', {
           name: str(project.name) ?? str(poetry.name),
+          description: oneLine(project.description) ?? oneLine(poetry.description),
           dependencies: uniqueNames(deps),
           devDependencies: uniqueNames([...optional, ...groups, ...poetryDev]),
           scripts: keys(project.scripts),
@@ -154,6 +162,7 @@ export function parseManifest(path: string, text: string): ParsedManifest | null
       return {
         manifest: manifest(path, 'cargo', {
           name: str(record(toml.package).name),
+          description: oneLine(record(toml.package).description),
           dependencies: keys(toml.dependencies),
           devDependencies: keys(toml['dev-dependencies']),
         }),

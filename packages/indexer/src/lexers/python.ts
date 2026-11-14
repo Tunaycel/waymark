@@ -1,3 +1,4 @@
+import { pythonSymbols } from '../symbols.ts';
 import type { Comment, RawImport, ScanResult } from '../types.ts';
 
 /**
@@ -139,5 +140,5 @@ export function scanPython(source: string): ScanResult {
       }
     }
   }
-  return { imports, comments };
+  return { imports, comments, symbols: pythonSymbols(lines) };
 }
