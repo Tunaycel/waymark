@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/*
+ * Waymark "observatory" theme: deep navy space, hairline structure, light where work happens.
+ * Every colour is a token here; components never hard-code colours.
+ */
+:root {
+  --bg: #060a13;
+  --bg-raised: #0b1220;
+  --panel: #0e1626;
+  --panel-hover: #121c30;
+  --line: rgb(148 163 184 / 0.12);
+  --line-strong: rgb(148 163 184 / 0.24);
+  --text: #e6ecf5;
+  --text-muted: #8a99b3;
+  --text-faint: #5b6984;
+  --accent: #5eead4;
+  --accent-soft: rgb(94 234 212 / 0.14);
+  --live: #38bdf8;
+  --live-glow: rgb(56 189 248 / 0.45);
+  --todo: #fbbf24;
+  --danger: #fb7185;
+
+  --role-feature: #5eead4;
+  --role-api: #a78bfa;
+  --role-ui: #f472b6;
+  --role-data: #fbbf24;
+  --role-infrastructure: #60a5fa;
+  --role-integration: #34d399;
+  --role-tooling: #94a3b8;
+  --role-tests: #a3e635;
+  --role-docs: #cbd5e1;
+  --role-config: #fb923c;
+  --role-other: #7c8aa5;
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-raised: var(--bg-raised);
+  --color-panel: var(--panel);
+  --color-panel-hover: var(--panel-hover);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-live: var(--live);
+  --color-todo: var(--todo);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  /* A faint starfield: two layers of tiny dots, fixed, behind everything. */
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, rgb(255 255 255 / 0.35), transparent 60%),
+    radial-gradient(1px 1px at 72% 34%, rgb(255 255 255 / 0.25), transparent 60%),
+    radial-gradient(1px 1px at 38% 82%, rgb(255 255 255 / 0.2), transparent 60%),
+    radial-gradient(1px 1px at 88% 76%, rgb(255 255 255 / 0.3), transparent 60%),
+    radial-gradient(1200px 600px at 70% -10%, rgb(56 189 248 / 0.07), transparent 70%),
+    radial-gradient(900px 500px at -10% 110%, rgb(94 234 212 / 0.05), transparent 70%);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* React Flow, restyled for the theme. */
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-minimap-background-color: var(--bg-raised);
+  --xy-controls-button-background-color: var(--panel);
+  --xy-controls-button-background-color-hover: var(--panel-hover);
+  --xy-controls-button-color: var(--text-muted);
+  --xy-controls-button-border-color: var(--line);
+  --xy-edge-stroke: var(--line-strong);
+  --xy-attribution-background-color: transparent;
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__controls {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: none;
+}
+.react-flow__minimap {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--live-glow);
+  }
+  50% {
+    box-shadow: 0 0 22px 2px var(--live-glow);
+  }
+}
+.live-pulse {
+  animation: live-pulse 2.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-pulse {
+    animation: none;
+    box-shadow: 0 0 14px 1px var(--live-glow);
+  }
+}
+
+/* Thin, quiet scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
