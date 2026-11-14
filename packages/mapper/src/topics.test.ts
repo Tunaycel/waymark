@@ -241,7 +241,8 @@ describe('assignIdentities', () => {
   });
 });
 
-describe('review regressions', () => {
+// Each case asserts its own time budget; vitest's 5 s default would cut a slow machine off first.
+describe('review regressions', { timeout: 30_000 }, () => {
   /** Shapes that used to take 10–230 s; each must now stay well under a few seconds. */
   const timed = (ms: number, input: TopicInput) => {
     const started = performance.now();
