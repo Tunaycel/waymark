@@ -18,7 +18,7 @@ sends briefs. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Roadma
    and docs are in English).
 5. **Commits are authored only by the maintainer's configured git identity.** Do not add
    `Co-Authored-By` or any other attribution trailer, and no AI attribution in PR descriptions.
-   Never expose a personal email; the repo uses the GitHub noreply address.
+   Commits use the GitHub noreply address.
 6. Discuss with the maintainer before starting the next roadmap phase.
 
 ## Commands
@@ -33,6 +33,9 @@ pnpm typecheck           # tsc in every package
 pnpm test                # unit tests (no infrastructure needed)
 pnpm test:integration    # real Postgres + Redis; requires infra:up
 pnpm db:generate         # after editing packages/db/src/schema.ts — commit the generated SQL
+pnpm map:local <path>    # index a local checkout and print modules, edges, dependencies
+pnpm bench               # webhook load test (needs a running server + worker)
+pnpm bench:index o/r …   # index public GitHub repositories and report timings
 ```
 
 ## Conventions
@@ -48,3 +51,5 @@ pnpm db:generate         # after editing packages/db/src/schema.ts — commit th
   drift.
 - Tests: unit tests next to the code (`*.test.ts`); anything needing Postgres/Redis goes in
   `tests/e2e`.
+- The indexer must never execute or trust repository content: no `require` of user code, no
+  following symlinks, paths normalised and length-limited, size limits on files and archives.

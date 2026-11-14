@@ -8,7 +8,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 ![Node ≥ 22.18](https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
-![Status](https://img.shields.io/badge/status-phase%200%20%C2%B7%20foundation-orange)
+![Status](https://img.shields.io/badge/status-phase%201a%20%C2%B7%20indexer-orange)
 
 </div>
 
@@ -23,8 +23,9 @@ It is built to grow beyond code: calendar, tasks, mail, and anything else you as
 your morning brief covers your whole day, not just your repositories.
 
 > [!NOTE]
-> Waymark is in **Phase 0**: the ingestion foundation. The map, reviews, and briefs are next.
-> See the [roadmap](docs/ROADMAP.md).
+> Waymark is in **Phase 1a**: every repository is ingested and structurally indexed (files,
+> import graph, modules, dependencies, TODOs). Topic naming, the interactive map, and briefs are
+> next. See the [roadmap](docs/ROADMAP.md).
 
 ## How it works
 
@@ -35,7 +36,9 @@ flowchart LR
   S --> Q[("Queue<br/>Redis · BullMQ")]
   Q --> W["Worker<br/>idempotent ingest"]
   W --> DB[("Postgres<br/>+ pgvector")]
-  DB -.-> M["Living map<br/>(Phase 1)"]
+  W -->|"default branch:<br/>debounced"| IX["Indexer thread<br/>tarball → import graph"]
+  IX --> DB
+  DB -.-> M["Living map<br/>(Phase 1b–d)"]
   DB -.-> R["Nightly review<br/>(Phase 2)"]
   DB -.-> B["Morning brief<br/>(Phase 3)"]
 ```
@@ -59,6 +62,10 @@ Each guarantee below is enforced in code **and** pinned by a test.
 | Out-of-order events can't move state backwards | Freshness is the server's receive time, not commit timestamps (author clocks lie); stale events can't rewind `last_push_at` or undo a rename | `ingest.test.ts` |
 | The largest possible push is handled | 25 MB body limit (GitHub's cap); inserts chunked below Postgres' 65,535-parameter limit | `ingest.test.ts` · 2,048-commit push |
 | Personal data is minimized | Author emails are dropped during parsing and never reach the queue or the database | [`push.test.ts`](packages/core/src/github/push.test.ts) |
+| A burst of pushes is indexed once; a push during indexing is never lost | Per-repository BullMQ deduplication: replace while delayed, keep the newest while running | [`indexing.test.ts`](tests/e2e/src/indexing.test.ts) · real Redis |
+| Import edges are exact, not grep-based | Own tokenizers skip comments, strings, templates, and regexes; resolvers follow Node/TS, `tsconfig` paths, workspace `exports`, Python package roots, `go.mod` | [`lexers.test.ts`](packages/indexer/src/lexers/lexers.test.ts) · [`resolve.test.ts`](packages/indexer/src/resolve/resolve.test.ts) · 100 % resolved on this repo |
+| A hostile repository can't stall or crash the worker | Indexing runs in a thread with hard time and heap budgets; every lexer, resolver, and parser is linear on adversarial input; archives are metered after decompression | [`isolated.test.ts`](packages/indexer/src/isolated.test.ts) · [`regressions.test.ts`](packages/indexer/src/regressions.test.ts) |
+| Repository content is data, never code | Nothing is executed; symlinks and paths outside the archive root are skipped; text Postgres rejects (NUL, broken surrogates) is cleaned | [`sources.test.ts`](packages/indexer/src/sources/sources.test.ts) · `indexing.test.ts` |
 | Misconfiguration fails at startup, all at once | zod-validated environment, every problem reported together | [`env.test.ts`](packages/core/src/env.test.ts) |
 
 ## Metrics
@@ -77,10 +84,25 @@ capacity promise.
 | Redis unreachable from startup | `503` after the 5 s enqueue timeout, inside GitHub's 10 s window |
 | Largest GitHub push (2,048 commits) | ingested in one transaction in ~0.5 s |
 
+**Repository indexing**, measured with [`pnpm bench:index`](scripts/bench-index.ts) on public
+GitHub tarballs (same streaming path as the worker; download time excluded):
+
+| Repository | Files | Lines | File edges | Modules | Internal imports resolved | Index | Store in Postgres |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| fastify/fastify (JS) | 392 | 102 k | 593 | 11 | **100 %** | 0.14 s | 0.21 s |
+| gin-gonic/gin (Go) | 130 | 29 k | 31 | 11 | **100 %** | 0.05 s | 0.06 s |
+| fastapi/fastapi (Python) | 3,243 | 394 k | 1,797 | 7 | **100 %** | 0.46 s | 0.55 s |
+| prometheus/prometheus (Go + TS) | 1,767 | 496 k | 2,606 | 33 | **100 %** | 0.60 s | 0.28 s |
+| django/django (Python) | 7,028 | 553 k | 9,073 | 9 | **100 %** | 0.97 s | 0.67 s |
+| vercel/next.js (TS monorepo) | 33,698 | 2.48 M | 25,603 | 747 | 98.2 % ¹ | 3.8 s | 3.0 s |
+
+¹ The remainder are imports of files generated at build time (e.g. benchmark templates).
+Throughput is 2.5k–8.9k files/s on one core; next.js peaks at +228 MB RSS.
+
 | Quality gate | Value |
 |---|---|
-| Unit tests | 56 (no infrastructure required) |
-| Integration tests | 15 (real Postgres + Redis, incl. failure recovery) |
+| Unit tests | 181 (no infrastructure required), incl. timed adversarial-input regressions |
+| Integration tests | 26 (real Postgres + Redis, incl. failure recovery and index scheduling) |
 | Type safety | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` |
 | Build step | none: Node runs the TypeScript sources directly |
 <!-- metrics:end -->
@@ -98,7 +120,8 @@ pnpm db:migrate
 pnpm dev                      # server on :3000 + worker
 ```
 
-Then connect a GitHub App by following [docs/GITHUB_APP.md](docs/GITHUB_APP.md).
+Then connect a GitHub App by following [docs/GITHUB_APP.md](docs/GITHUB_APP.md). Indexing
+needs the App's ID and private key in `.env`; without them, pushes are still ingested.
 
 | Command | What it does |
 |---|---|
@@ -108,6 +131,8 @@ Then connect a GitHub App by following [docs/GITHUB_APP.md](docs/GITHUB_APP.md).
 | `pnpm typecheck` | Strict TypeScript across all packages |
 | `pnpm db:generate` | Generate a migration after editing the schema |
 | `pnpm bench [n] [concurrency] [commits]` | Load-test a running server + worker |
+| `pnpm map:local <path>` | Index a local checkout and print modules, edges, dependencies |
+| `pnpm bench:index owner/repo …` | Index public GitHub repositories and report timings |
 
 ## Repository layout
 
@@ -117,11 +142,13 @@ apps/
   worker/     BullMQ consumer: persists events
 packages/
   core/       Env validation, GitHub signature + payload parsing (pure, no I/O)
-  db/         Drizzle schema, migrations, idempotent ingestion
+  db/         Drizzle schema, migrations, idempotent ingestion, snapshots
+  github/     GitHub App client: JWT, installation tokens, repository reads, tarballs
+  indexer/    Tokenizers, import resolvers, module graph, sources, isolated thread
   queue/      Queue/worker factories, job types, health check
 tests/
   e2e/        Integration tests against real Postgres + Redis
-scripts/      Load test (pnpm bench)
+scripts/      Webhook load test and indexer benchmark
 docs/         Architecture, roadmap, GitHub App setup
 ```
 
@@ -129,8 +156,9 @@ docs/         Architecture, roadmap, GitHub App setup
 
 | Phase | Ships | Status |
 |---|---|---|
-| 0 · Foundation | Reliable GitHub ingestion | 🚧 |
-| 1 · Living map | Interactive project map + "where you left off" | 📋 |
+| 0 · Foundation | Reliable GitHub ingestion | ✅ |
+| 1a · Indexer | Import graph, modules, dependencies, TODOs per repository | 🚧 |
+| 1b–d · Living map | Topic naming, interactive map, "where you left off" | 📋 |
 | 2 · Review | Per-push triage, nightly review, pattern memory | 📋 |
 | 3 · Life layer | Calendar, tasks, morning brief on WhatsApp/Telegram | 📋 |
 | 4 · Ecosystem | MCP server, works inside other agents | 📋 |

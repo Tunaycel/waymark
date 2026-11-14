@@ -31,7 +31,7 @@ flowchart TB
   end
 
   subgraph Engines["Engines"]
-    MAP["① Project Mapper<br/>living map 📋"]
+    MAP["① Project Mapper<br/>indexer ✅ · topics · map 📋"]
     REV["② Review Engine<br/>triage + nightly review 📋"]
     PLAN["③ Life Planner<br/>calendar + tasks 📋"]
     SIG["Watch Engine<br/>signal scoring 📋"]
@@ -137,14 +137,116 @@ erDiagram
   }
 ```
 
-## 4. Engines (planned)
+## 4. Phase 1a: the indexer ✅
 
-### ① Project Mapper: the living map (Phase 1)
-- **Initial index:** file tree, README, manifests, and a tree-sitter import graph. An LLM groups
-  files into meaningful topics ("Auth", "Payments", "Editor UI") → a graph of nodes and edges.
-- **Incremental update:** each push maps its changed files to affected nodes; only those nodes are
-  re-summarized. The repository is never re-read wholesale.
-- **"Where you left off":** recently touched nodes, open branches, unfinished PRs, new
+The map starts from structure, not from an LLM: which files exist, what they import, which
+packages they depend on. That part is deterministic, cheap, and testable, so it is built first.
+Phase 1b names and summarises the modules it finds.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant GH as GitHub
+  participant S as Server
+  participant R as Redis
+  participant W as Worker
+  participant P as Postgres
+
+  alt App installed / repositories added
+    GH->>S: installation · installation_repositories
+    S->>R: index job per repository (no delay)
+  else push to the default branch
+    W->>R: after ingesting the push: index job,<br/>debounced 15 s per repository
+  end
+  R->>W: index job (concurrency 1, one at a time per repository)
+  W->>GH: GET /repos/{repo} (current name, default branch)
+  W->>GH: GET /commits/{branch} → head SHA
+  W->>P: snapshot for (repo, SHA) exists? → done
+  W->>GH: GET /tarball/{sha} (streamed)
+  W->>W: in a worker thread (time + heap budget):<br/>gunzip → untar → lex → resolve → graph
+  W->>P: BEGIN · snapshot · files · edges · prune to 3 · COMMIT
+```
+
+### What an index contains
+
+| Part | How it is computed |
+|---|---|
+| Files | path, language (60+ by extension/name), kind (source · test · config · docs · asset), size, lines, **git blob SHA** (equals GitHub's tree SHA, so Phase 1b can skip unchanged files) |
+| Import graph | own tokenizers for JS/TS (incl. Vue/Svelte/Astro script blocks), Python, and Go that skip comments, strings, templates, and regex literals; then resolvers that follow Node/TypeScript rules (extensions, `.js`→`.ts`/`.d.ts`, `index`, `package.json` `main`/`exports`, `tsconfig` `paths`/`baseUrl` with `extends`), workspace packages, Python package roots and relative imports, and `go.mod` modules |
+| Modules | one per workspace package in a monorepo, else the first meaningful directory (`src/auth`); weighted module-to-module edges |
+| Dependencies | external packages per ecosystem (npm, PyPI, Go, Cargo), how many files import each, and whether a manifest declares it |
+| Frameworks | from runtime dependencies (Next.js, FastAPI, Django, Gin, Axum, …) |
+| Markers | `TODO` / `FIXME` / `HACK` / `XXX` / `BUG` found in **comments only** (capped at 1,000) |
+| Diagnostics | import counts by outcome (internal, external, builtin, build output, unresolved) and a sample of unresolved imports |
+
+### Why it is built this way
+
+| Decision | Reason |
+|---|---|
+| **Tarball, streamed** | One HTTP request per snapshot instead of one API call per file, no git binary, no disk writes, and memory proportional to the file count, not the repository size. |
+| **Own tokenizers instead of tree-sitter (for now)** | Imports are the only syntax the map needs. A tokenizer that understands comments, strings, templates, and regex literals finds them exactly and is pure TypeScript (no native or WASM build). Tree-sitter remains an option for richer symbols later. |
+| **Index the head at run time, not the pushed SHA** | Push jobs can be processed out of order. Resolving the default branch head when the job runs guarantees the newest commit is indexed last. |
+| **Per-repository debounce** | Pushes come in bursts (a rebase, several quick commits). One BullMQ deduplication key per repository: a push while the job waits replaces it and restarts the 15 s delay; a push while it runs is kept and starts right after (`keepLastIfActive`). At most one waiting and one running job per repository, so no push is lost and runs never overlap. |
+| **Indexing in a separate thread** | Repository content is untrusted and indexing is CPU-bound. In-process, one pathological file would block the event loop: no timeout could interrupt it and the queue lock could not be renewed, so the job would be re-run again and again. The tarball stream is transferred to a worker thread with a hard time budget (10 min) and heap budget (1.5 GB); exceeding either kills the thread and fails the job once. |
+| **Snapshots keyed by (repository, commit)** | Retries, redeliveries, and concurrent workers converge on one row. The newest three are kept so changes between snapshots can be compared. |
+| **The repository is data, never code** | Nothing from the repository is executed or `require`d; symlinks, hard links, devices, and entries outside the archive's root folder are skipped; paths are normalised (no `..`, no absolute paths, ≤ 1,200 UTF-8 bytes); every size, depth, and count read from it is capped. |
+
+### Guarantees
+
+| Property | Mechanism | Verified by |
+|---|---|---|
+| No false edges from comments, strings, or regexes | tokenizers skip them; unterminated strings recover at the line break | `lexers.test.ts` |
+| Resolution follows the toolchains' rules | Node/TS lookup order, `exports` conditions, `tsconfig` `paths` + `extends`, Python roots, `go.mod` | `resolve.test.ts`, self-index of this repository (100 % resolved) |
+| Same input, same index | stable ordering everywhere, independent of archive order | `indexer.test.ts` |
+| Hostile archives can't escape or exhaust | regular files under the archive's root folder only; path normalisation (≤ 1,200 UTF-8 bytes); per-file, total, and decompressed-byte caps that truncate instead of failing; stream destroyed on early exit | `sources.test.ts` |
+| Large repositories degrade, not fail | file-count and byte limits mark the snapshot `truncated` | `indexer.test.ts` |
+| A burst of pushes indexes once; a push during indexing is not lost | deduplication: replace while delayed, keep the newest while active | `indexing.test.ts` (real Redis) |
+| A pathological repository can't stall the worker | linear-time lexers, resolvers, and parsers (timed tests on adversarial input); indexing thread with hard time and heap budgets | `regressions.test.ts`, `isolated.test.ts` |
+| Text Postgres rejects never blocks a repository | NUL and unpaired surrogates are removed before writing; marker text is cut at code points | `indexing.test.ts` |
+| Concurrent or repeated indexing stores one snapshot | `UNIQUE (repository_id, commit_sha)` + `ON CONFLICT DO NOTHING`, existence check before download | `indexing.test.ts` |
+| Gone or empty repositories don't retry forever | 404/410/451 → unrecoverable; 409 (empty) → skipped | `indexing.test.ts` |
+| Repository names can't rewrite API URLs | `owner/name` validated, `.`/`..` segments refused | `app.test.ts`, `installation.test.ts` |
+
+### Data model (Phase 1a additions)
+
+```mermaid
+erDiagram
+  repositories ||--o{ repo_snapshots : "indexed as"
+  repo_snapshots ||--o{ snapshot_files : contains
+  repo_snapshots ||--o{ snapshot_edges : contains
+  repo_snapshots {
+    uuid id PK
+    uuid repository_id FK
+    text commit_sha "UK with repository_id"
+    int file_count
+    int edge_count
+    bool truncated
+    jsonb summary "modules, module edges, deps, manifests, frameworks, markers, stats"
+  }
+  snapshot_files {
+    uuid snapshot_id PK
+    text path PK
+    text language
+    text kind
+    text module
+    int lines
+    text blob_sha
+  }
+  snapshot_edges {
+    uuid snapshot_id PK
+    text from_path PK
+    text to_path PK
+  }
+```
+
+## 5. Engines (planned)
+
+### ① Project Mapper: from index to living map (Phases 1b–1d)
+- **Topic grouping (1b):** an LLM names and summarises the modules from the index ("Auth",
+  "Payments", "Editor UI"), splitting or merging them where the directory layout misleads.
+- **Incremental update:** each new snapshot is compared with the previous one by blob SHA; only
+  topics with changed files are re-summarised. The repository is never re-read wholesale.
+- **"Where you left off" (1d):** recently touched topics, open branches, unfinished PRs, new
   TODO/FIXME, WIP commits, and the next roadmap milestone.
 
 ### ② Review Engine (Phase 2)
@@ -163,12 +265,13 @@ erDiagram
 - Hard limits: watches **observe and remind**. They never move money, and regulatory alerts always
   link to the official source and are not legal advice.
 
-## 5. Security and privacy model
+## 6. Security and privacy model
 
 - GitHub App with minimum permissions: `metadata:read`, `contents:read` (plus `pull_requests:write`
   only if the user enables fix-PR suggestions).
 - Webhook secret ≥ 16 chars, enforced at startup.
-- Store summaries, not source code. Drop data the product doesn't use.
+- Store structure and summaries, not source code: snapshots hold paths, languages, line counts,
+  hashes, imports, and comment markers, never file contents. Drop data the product doesn't use.
 - Self-hostable end to end; local-model support is planned for users who keep everything on their
   own machine.
 - The agent asks before it sends anything on the user's behalf.
