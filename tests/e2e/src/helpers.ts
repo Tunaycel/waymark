@@ -9,7 +9,9 @@ export const REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6380';
 export async function freshDatabase(): Promise<DatabaseHandle> {
   await runMigrations(DATABASE_URL);
   const handle = createDatabase(DATABASE_URL, { max: 5 });
-  await handle.db.execute(sql`truncate table commits, repositories restart identity cascade`);
+  await handle.db.execute(
+    sql`truncate table snapshot_edges, snapshot_files, repo_snapshots, commits, repositories restart identity cascade`,
+  );
   return handle;
 }
 

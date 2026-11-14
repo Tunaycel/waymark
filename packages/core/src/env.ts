@@ -20,8 +20,30 @@ const serverSchema = baseSchema.extend({
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
 });
 
+/**
+ * The worker can index repositories when GitHub App credentials are present. They are optional so
+ * ingestion runs without them, but a half-configured App (one variable set) is an error.
+ */
+const workerSchema = baseSchema
+  .extend({
+    GITHUB_APP_ID: z.string().regex(/^\d+$/, 'GITHUB_APP_ID must be the numeric App ID').optional(),
+    GITHUB_APP_PRIVATE_KEY: z
+      .string()
+      .includes('PRIVATE KEY', { message: 'GITHUB_APP_PRIVATE_KEY must be a PEM private key' })
+      .optional(),
+    GITHUB_API_URL: z.url({ protocol: /^https?$/ }).default('https://api.github.com'),
+  })
+  .refine(
+    (env) => (env.GITHUB_APP_ID === undefined) === (env.GITHUB_APP_PRIVATE_KEY === undefined),
+    {
+      message: 'set both GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY, or neither',
+      path: ['GITHUB_APP_PRIVATE_KEY'],
+    },
+  );
+
 export type BaseEnv = z.infer<typeof baseSchema>;
 export type ServerEnv = z.infer<typeof serverSchema>;
+export type WorkerEnv = z.infer<typeof workerSchema>;
 
 /** Thrown when required configuration is missing or invalid. Lists every problem at once. */
 export class EnvError extends Error {
@@ -52,4 +74,8 @@ export function loadBaseEnv(source: NodeJS.ProcessEnv = process.env): BaseEnv {
 
 export function loadServerEnv(source: NodeJS.ProcessEnv = process.env): ServerEnv {
   return parse(serverSchema, source);
+}
+
+export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEnv {
+  return parse(workerSchema, source);
 }

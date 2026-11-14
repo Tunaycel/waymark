@@ -3,8 +3,15 @@ export {
   EnvError,
   loadBaseEnv,
   loadServerEnv,
+  loadWorkerEnv,
   type ServerEnv,
+  type WorkerEnv,
 } from './env.ts';
+export {
+  type InstallationParseResult,
+  type InstalledRepository,
+  parseInstallationEvent,
+} from './github/installation.ts';
 export {
   type NormalizedCommit,
   type PushJob,

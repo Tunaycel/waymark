@@ -1,11 +1,18 @@
-import { type PushJob, parsePushEvent, verifyGitHubSignature } from '@waymark/core';
-import type { EnqueueOutcome } from '@waymark/queue';
+import {
+  type PushJob,
+  parseInstallationEvent,
+  parsePushEvent,
+  verifyGitHubSignature,
+} from '@waymark/core';
+import type { EnqueueOutcome, IndexJob } from '@waymark/queue';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 
 export interface AppDeps {
   webhookSecret: string;
   /** Hands a normalized push to the queue. Injected so the HTTP layer is testable without Redis. */
   enqueuePush: (job: PushJob) => Promise<EnqueueOutcome>;
+  /** Schedules initial indexing for repositories the App was just given access to. */
+  enqueueIndex?: (jobs: IndexJob[]) => Promise<void>;
   /** Readiness probe for downstream dependencies (Redis). */
   isReady?: () => Promise<boolean>;
   logger?: FastifyServerOptions['logger'];
@@ -79,6 +86,32 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       }
 
       if (event === 'ping') return reply.code(200).send({ status: 'pong' });
+
+      if (
+        (event === 'installation' || event === 'installation_repositories') &&
+        deps.enqueueIndex
+      ) {
+        const parsed = parseInstallationEvent(event, payload);
+        if (parsed.kind === 'skip') {
+          return reply.code(202).send({ status: 'skipped', reason: parsed.reason });
+        }
+        const jobs: IndexJob[] = parsed.repositories.map((r) => ({
+          githubId: r.githubId,
+          fullName: r.fullName,
+          installationId: parsed.installationId,
+          sha: null,
+          reason: 'installation',
+        }));
+        try {
+          await deps.enqueueIndex(jobs);
+        } catch (err) {
+          req.log.error({ err, deliveryId }, 'failed to enqueue initial indexing');
+          return reply.code(503).send({ error: 'queue unavailable, redeliver later' });
+        }
+        req.log.info({ deliveryId, repositories: jobs.length }, 'initial indexing scheduled');
+        return reply.code(202).send({ status: 'queued', repositories: jobs.length });
+      }
+
       if (event !== 'push') {
         // Acknowledge so GitHub doesn't mark the delivery failed; we just don't use it yet.
         return reply.code(202).send({ status: 'ignored', event });

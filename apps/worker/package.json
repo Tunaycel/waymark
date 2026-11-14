@@ -7,6 +7,8 @@
   "dependencies": {
     "@waymark/core": "workspace:*",
     "@waymark/db": "workspace:*",
+    "@waymark/github": "workspace:*",
+    "@waymark/indexer": "workspace:*",
     "@waymark/queue": "workspace:*",
     "pino": "^10.4.0"
   },
@@ -17,6 +19,7 @@
     "dev": "node --watch --env-file-if-exists=../../.env src/main.ts"
   },
   "exports": {
-    ".": "./src/processor.ts"
+    ".": "./src/processor.ts",
+    "./indexing": "./src/indexing.ts"
   }
 }
