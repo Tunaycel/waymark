@@ -37,7 +37,11 @@ export const repositories = pgTable(
     lastPushAt: timestamp('last_push_at', { withTimezone: true }),
     ...timestamps,
   },
-  (t) => [uniqueIndex('repositories_github_id_key').on(t.githubId)],
+  (t) => [
+    uniqueIndex('repositories_github_id_key').on(t.githubId),
+    // Who may see a repository: the dashboard filters by the viewer's installations.
+    index('repositories_installation_id_idx').on(t.installationId),
+  ],
 );
 
 export interface CommitFiles {
@@ -234,6 +238,46 @@ export const llmUsage = pgTable(
     costUsd: numeric('cost_usd', { precision: 12, scale: 6, mode: 'number' }).notNull(),
   },
   (t) => [index('llm_usage_created_at_idx').on(t.createdAt)],
+);
+
+/**
+ * A person allowed to sign in to the dashboard. Only identity and the repositories they could access
+ * through the App at their last sign-in are kept; their GitHub token is used once and revoked.
+ */
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    githubId: bigint('github_id', { mode: 'number' }).notNull(),
+    login: text('login').notNull(),
+    name: text('name'),
+    avatarUrl: text('avatar_url'),
+    /**
+     * GitHub ids of the repositories this user could access through the App at their last sign-in:
+     * per repository, not per installation (an org installation can hold repos a member can't see).
+     */
+    repositoryIds: jsonb('repository_ids').$type<number[]>().notNull().default([]),
+    lastSignInAt: timestamp('last_sign_in_at', { withTimezone: true }).notNull().defaultNow(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex('users_github_id_key').on(t.githubId)],
+);
+
+/** A signed-in browser. The cookie holds a random token; only its SHA-256 is stored here. */
+export const sessions = pgTable(
+  'sessions',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index('sessions_user_id_idx').on(t.userId),
+    index('sessions_expires_at_idx').on(t.expiresAt),
+  ],
 );
 
 export type Repository = typeof repositories.$inferSelect;

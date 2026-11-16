@@ -51,7 +51,7 @@ export async function freshDatabase(): Promise<DatabaseHandle> {
   await runMigrations(DATABASE_URL);
   const handle = createDatabase(DATABASE_URL, { max: 5 });
   await handle.db.execute(
-    sql`truncate table llm_usage, repository_topics, snapshot_topic_edges, snapshot_topics, snapshot_edges, snapshot_files, repo_snapshots, commits, repositories restart identity cascade`,
+    sql`truncate table llm_usage, repository_topics, snapshot_topic_edges, snapshot_topics, snapshot_edges, snapshot_files, repo_snapshots, commits, repositories, sessions, users restart identity cascade`,
   );
   return handle;
 }

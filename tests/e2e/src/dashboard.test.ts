@@ -1,4 +1,5 @@
 import {
+  ALL_REPOSITORIES as ALL,
   commits,
   type DatabaseHandle,
   listRepositoryCards,
@@ -98,7 +99,7 @@ describe('dashboard read models → Postgres', () => {
   });
 
   it('finds a repository case-insensitively and marks recently changed topics', async () => {
-    const map = await repositoryMap(handle.db, 'octo/SHOP');
+    const map = await repositoryMap(handle.db, 'octo/SHOP', ALL);
     expect(map?.repository.fullName).toBe('Octo/Shop');
     const billing = map?.topics.find((t) => t.directory.includes('billing'));
     const auth = map?.topics.find((t) => t.directory.includes('auth'));
@@ -107,20 +108,20 @@ describe('dashboard read models → Postgres', () => {
     // Newest touching commit wins.
     expect(Date.now() - Date.parse(billing?.lastChangedAt ?? '')).toBeLessThan(86_400_000);
     expect(map?.edges.length).toBeGreaterThanOrEqual(0);
-    expect(await repositoryMap(handle.db, 'octo/nope')).toBeNull();
+    expect(await repositoryMap(handle.db, 'octo/nope', ALL)).toBeNull();
   });
 
   it('prefers the latest snapshot that has topics over a newer one still being built', async () => {
     const index = await indexRepository(memory({ ...PROJECT, 'src/new.ts': 'export {}' }));
     const newer = await saveSnapshot(handle.db, repositoryId, sha(), index);
     expect(newer.snapshotId).not.toBe(snapshotId);
-    const map = await repositoryMap(handle.db, 'Octo/Shop');
+    const map = await repositoryMap(handle.db, 'Octo/Shop', ALL);
     expect(map?.snapshot.id).toBe(snapshotId);
     expect(map?.topics.length).toBe(2);
   });
 
   it('summarises each repository for the project list', async () => {
-    const [card] = await listRepositoryCards(handle.db);
+    const [card] = await listRepositoryCards(handle.db, ALL);
     expect(card).toMatchObject({ fullName: 'Octo/Shop', commits7d: 3 });
     expect(card?.snapshot).toMatchObject({ id: snapshotId, topicCount: 2, markerCount: 1 });
     expect(card?.activeTopics).toHaveLength(2);
@@ -140,9 +141,15 @@ describe('dashboard read models → Postgres', () => {
   });
 
   it('returns a topic panel with its files, TODOs, and recent commits only', async () => {
-    const map = await repositoryMap(handle.db, 'Octo/Shop');
+    const map = await repositoryMap(handle.db, 'Octo/Shop', ALL);
     const billing = map?.topics.find((t) => t.directory.includes('billing'));
-    const detail = await topicDetail(handle.db, repositoryId, snapshotId, billing?.id as string);
+    const detail = await topicDetail(
+      handle.db,
+      repositoryId,
+      snapshotId,
+      billing?.id as string,
+      ALL,
+    );
     expect(detail?.fileCount).toBe(5);
     expect(detail?.files.map((f) => f.path)).toContain('src/billing/invoice.ts');
     expect(detail?.markers.map((m) => m.text)).toEqual(['round VAT per line']);
@@ -154,8 +161,8 @@ describe('dashboard read models → Postgres', () => {
       .insert(repositories)
       .values({ githubId: 502, fullName: 'octo/other', defaultBranch: 'main', isPrivate: true })
       .returning({ id: repositories.id });
-    const map = await repositoryMap(handle.db, 'Octo/Shop');
+    const map = await repositoryMap(handle.db, 'Octo/Shop', ALL);
     const topic = map?.topics[0]?.id as string;
-    expect(await topicDetail(handle.db, other?.id as string, snapshotId, topic)).toBeNull();
+    expect(await topicDetail(handle.db, other?.id as string, snapshotId, topic, ALL)).toBeNull();
   });
 });
