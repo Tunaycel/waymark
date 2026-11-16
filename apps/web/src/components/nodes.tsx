@@ -4,7 +4,7 @@ import type { MapTopic } from '@waymark/db';
 import { Handle, type NodeProps, Position } from '@xyflow/react';
 import { ChevronRight, Sparkles, StickyNote } from 'lucide-react';
 import { memo } from 'react';
-import { compact, heatOf, roleColor } from '@/lib/format';
+import { compact, heatOf, roleColor, timeAgo } from '@/lib/format';
 
 export interface TopicNodeData extends Record<string, unknown> {
   topic: MapTopic;
@@ -76,7 +76,14 @@ export const TopicNode = memo(function TopicNode({ data }: NodeProps) {
         </div>
         <div className="flex items-center gap-2 text-[11px] text-faint">
           <span className="tabular-nums">{compact(files)} files</span>
-          <span className="tabular-nums">{compact(topic.lineCount)} lines</span>
+          {heat === 'cold' || !topic.lastChangedAt ? (
+            <span className="tabular-nums">{compact(topic.lineCount)} lines</span>
+          ) : (
+            // Recently changed: when matters more than how big.
+            <span className={heat === 'live' ? 'text-live' : 'text-muted'}>
+              {timeAgo(topic.lastChangedAt)}
+            </span>
+          )}
           {topic.markerCount > 0 && (
             <span
               className="ml-auto inline-flex items-center gap-0.5 text-todo"

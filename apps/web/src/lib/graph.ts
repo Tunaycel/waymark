@@ -441,13 +441,14 @@ export function neighbours(map: RepositoryMap, topicId: string) {
   return { uses, usedBy };
 }
 
-/** Above this many topics, "expand" opens one level at a time: a full layout would block the page. */
+/** Above this many topics, "expand" opens one level at a time instead of everything at once. */
 export const EXPAND_ALL_LIMIT = 300;
 /**
- * The expand buttons stop above this many visible nodes: ELK needs ~4 s for 300 on the main thread
- * (vercel/next.js), and a frozen tab is worse than one more click on a region.
+ * The expand buttons stop above this many visible nodes. Layout runs in a worker, so the limit is
+ * drawing and reading: on vercel/next.js 595 nodes take 1.6 s with a longest frame of ~260 ms;
+ * beyond that, a click on a region or a search shows more.
  */
-export const MAX_VISIBLE_NODES = 250;
+export const MAX_VISIBLE_NODES = 600;
 
 /** Opens every collapsed group or region that is currently visible (no collapsed ancestor). */
 export function expandOneLevel(map: RepositoryMap, collapsed: ReadonlySet<string>): Set<string> {
