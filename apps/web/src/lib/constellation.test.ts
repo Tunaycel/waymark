@@ -5,6 +5,8 @@ import {
   clusterRadius,
   layoutConstellations,
   type OverviewProject,
+  type PlacedProject,
+  signalRoutes,
   starSize,
 } from './constellation';
 
@@ -137,5 +139,84 @@ describe('robustness', () => {
     for (const lines of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
       expect(Number.isFinite(starSize(lines))).toBe(true);
     }
+  });
+});
+
+describe('signalRoutes', () => {
+  it('sends signals along links touching recent work first', () => {
+    // Star 0 changed today, 1 this week, the rest are quiet.
+    const [p] = layoutConstellations(
+      [
+        project('a', 6, [
+          [3, 4],
+          [2, 5],
+          [1, 3],
+          [0, 2],
+        ]),
+      ],
+      NOW,
+    );
+    const routes = signalRoutes(p as PlacedProject);
+    expect(routes.map((r) => r.energy)).toEqual(['live', 'warm', 'cold', 'cold']);
+    expect(routes[0]).toMatchObject({ from: 0, to: 2 });
+  });
+
+  it('keeps only a few slow signals in a quiet project', () => {
+    const quiet = project(
+      'q',
+      40,
+      Array.from({ length: 30 }, (_, i) => [i + 2, i + 3]),
+    );
+    const [p] = layoutConstellations([quiet], NOW);
+    const routes = signalRoutes(p as PlacedProject, 48, 10);
+    expect(routes).toHaveLength(10);
+    expect(routes.every((r) => r.energy === 'cold')).toBe(true);
+  });
+
+  it('caps a busy project', () => {
+    const busy = project(
+      'b',
+      120,
+      Array.from({ length: 100 }, (_, i) => [0, i + 1]),
+    );
+    const [p] = layoutConstellations([busy], NOW);
+    expect(signalRoutes(p as PlacedProject, 48)).toHaveLength(48);
+  });
+});
+
+describe('signalRoutes edges', () => {
+  const placed = (stars: number, links: [number, number][]) =>
+    layoutConstellations([project('e', stars, links)], NOW)[0] as PlacedProject;
+
+  it('runs from the hotter end even when the link is stored the other way', () => {
+    // Star 0 changed today; the link is stored quiet -> live.
+    expect(signalRoutes(placed(4, [[3, 0]]))).toEqual([{ from: 0, to: 3, energy: 'live' }]);
+  });
+
+  it('adds only a few quiet routes when one link is hot', () => {
+    const links: [number, number][] = [
+      [0, 2],
+      ...Array.from({ length: 200 }, (_, i): [number, number] => [i + 3, i + 4]),
+    ];
+    const routes = signalRoutes(placed(220, links), 48, 10);
+    expect(routes.filter((r) => r.energy !== 'cold')).toHaveLength(1);
+    expect(routes).toHaveLength(11);
+  });
+
+  it('handles no links, links to missing stars, and keeps the stored order among equals', () => {
+    expect(signalRoutes(placed(3, []))).toEqual([]);
+    expect(signalRoutes(placed(3, [[0, 9]]))).toEqual([]);
+    const routes = signalRoutes(
+      placed(10, [
+        [5, 6],
+        [3, 4],
+        [7, 8],
+      ]),
+    );
+    expect(routes.map((r) => [r.from, r.to])).toEqual([
+      [5, 6],
+      [3, 4],
+      [7, 8],
+    ]);
   });
 });

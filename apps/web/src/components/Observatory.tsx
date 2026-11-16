@@ -11,6 +11,7 @@ import {
   layoutConstellations,
   type OverviewProject,
   type PlacedProject,
+  signalRoutes,
 } from '@/lib/constellation';
 import { mapHref } from '@/lib/paths';
 
@@ -22,10 +23,16 @@ import { mapHref } from '@/lib/paths';
 
 // Concrete colours: shaders and WebGL don't resolve CSS variables. They match globals.css.
 const HEAT_COLOR = { live: '#38bdf8', warm: '#5eead4', cold: '#8a99b3' } as const;
-const HEAT_ALPHA = { live: 1, warm: 0.9, cold: 0.5 } as const;
-const LINK_COLOR = '#5eead4';
+const HEAT_ALPHA = { live: 1, warm: 0.9, cold: 0.38 } as const;
 /** Pointer travel (px) after which a press on a cluster counts as a drag, not a click. */
 const CLICK_SLOP = 4;
+
+/*
+ * Shared by both point shaders. `uScale` is in device pixels per world unit at distance 1 (the
+ * canvas height times the pixel ratio), so a star is the same size on a standard and a Retina
+ * screen. Sizes are capped: flying into a cluster must not turn one star into a screen-wide flash.
+ */
+const POINT_SIZE_CAP = 64;
 
 const STAR_VERTEX = /* glsl */ `
   attribute float aSize;
@@ -40,7 +47,7 @@ const STAR_VERTEX = /* glsl */ `
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     float pulse = 1.0 + aPulse * 0.25 * sin(uTime * 2.4 + position.x * 3.1 + position.z * 1.7);
-    gl_PointSize = aSize * pulse * uScale / -mv.z;
+    gl_PointSize = min(aSize * pulse * uScale / max(-mv.z, 0.001), ${POINT_SIZE_CAP.toFixed(1)});
     gl_Position = projectionMatrix * mv;
     vColor = aColor;
     vAlpha = aAlpha * uDim;
@@ -53,12 +60,83 @@ const STAR_FRAGMENT = /* glsl */ `
   void main() {
     float d = length(gl_PointCoord - 0.5);
     if (d > 0.5) discard;
-    // A bright core and a soft halo.
-    float core = smoothstep(0.16, 0.0, d) * 0.65;
-    float halo = smoothstep(0.5, 0.05, d) * 0.4;
-    gl_FragColor = vec4(vColor, (core + halo) * vAlpha);
+    // A crisp disc with a short, fast-falling glow: sharp at any zoom, no smeared haze. The
+    // edge is antialiased over one screen pixel (fwidth), so it stays smooth without
+    // supersampling the whole canvas.
+    float edge = max(fwidth(d), 0.02);
+    float core = 1.0 - smoothstep(0.11 - edge, 0.11 + edge, d);
+    float glow = exp(-d * d * 42.0) * 0.45;
+    gl_FragColor = vec4(vColor, (core * 0.9 + glow) * vAlpha);
+    // Colours are kept linear; convert to the screen's sRGB like three's own materials do,
+    // so a star, its link, and the legend's CSS colour all match.
+    #include <colorspace_fragment>
   }
 `;
+
+/**
+ * Points that run along links: a bright head and a short fading tail. `position` is the link's
+ * start (it also gives three the draw count); the tail's spacing is in world units, so a streak
+ * has the same length on a short link and a long one.
+ */
+const SIGNAL_VERTEX = /* glsl */ `
+  attribute vec3 aEnd;
+  attribute float aLength;
+  attribute float aPhase;
+  attribute float aSpeed;
+  attribute float aTrail;
+  attribute vec3 aColor;
+  attribute float aBright;
+  uniform float uTime;
+  uniform float uScale;
+  uniform float uDim;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    float head = fract(uTime * aSpeed + aPhase);
+    float t = head - aTrail * 0.07 / aLength;
+    float inside = step(0.0, t);
+    t = clamp(t, 0.0, 1.0);
+    vec4 mv = modelViewMatrix * vec4(mix(position, aEnd, t), 1.0);
+    gl_Position = projectionMatrix * mv;
+    vColor = aColor;
+    // Fades in as it leaves a star and out as it arrives.
+    vAlpha = inside * sin(3.14159 * t) * aBright * (1.0 - aTrail * 0.11) * uDim;
+    // A tail point that hasn't left the star yet is skipped entirely, not drawn and discarded.
+    float size = (0.42 - aTrail * 0.04) * uScale / max(-mv.z, 0.001);
+    gl_PointSize = vAlpha > 0.0 ? min(size, ${(POINT_SIZE_CAP / 2).toFixed(1)}) : 0.0;
+  }
+`;
+
+const SIGNAL_FRAGMENT = /* glsl */ `
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    float d = length(gl_PointCoord - 0.5);
+    if (d > 0.5 || vAlpha <= 0.0) discard;
+    float core = 1.0 - smoothstep(0.12, 0.2, d);
+    float glow = exp(-d * d * 30.0) * 0.6;
+    gl_FragColor = vec4(mix(vColor, vec3(1.0), core * 0.55), (core + glow) * vAlpha);
+    #include <colorspace_fragment>
+  }
+`;
+
+/**
+ * Seconds handed to the shaders, wrapped: a float32 clock that has run for a day moves in uneven
+ * steps (≈8 ms), and after a week signals would jump. Wrapping every 1024 s is invisible.
+ */
+const shaderTime = (elapsed: number) => elapsed % 1024;
+
+/** Device pixels per world unit at distance 1, for the point shaders. */
+const pointScale = (height: number, dpr: number) => height * dpr * 1.13;
+
+/** Per heat: link brightness, signal speed (link lengths per second), and signal brightness. */
+const ENERGY = {
+  live: { line: 1, speed: 0.55, bright: 1 },
+  warm: { line: 0.75, speed: 0.38, bright: 0.85 },
+  cold: { line: 0.42, speed: 0.16, bright: 0.5 },
+} as const;
+/** Points per signal: close together they draw one short, tapering streak. */
+const SIGNAL_TRAIL = 8;
 
 export function Observatory({
   projects,
@@ -91,6 +169,8 @@ export function Observatory({
       <Canvas
         frameloop={!visible ? 'never' : animate ? 'always' : 'demand'}
         dpr={[1, 2]}
+        // No tone mapping: the theme's colours, without a film curve that washes them out.
+        flat
         gl={{ antialias: true, alpha: true }}
         camera={{
           fov: 45,
@@ -282,7 +362,7 @@ function Cluster({
   onHover: (id: string | null) => void;
 }) {
   const router = useRouter();
-  const { size, invalidate } = useThree();
+  const { size, viewport, invalidate } = useThree();
 
   const stars = useMemo(() => {
     const n = project.stars.length;
@@ -313,14 +393,89 @@ function Cluster({
 
   const lines = useMemo(() => {
     const positions = new Float32Array(project.links.length * 6);
+    const colors = new Float32Array(project.links.length * 6);
+    const color = new THREE.Color();
     project.links.forEach(([a, b], i) => {
-      positions.set(project.stars[a]?.position ?? [0, 0, 0], i * 6);
-      positions.set(project.stars[b]?.position ?? [0, 0, 0], i * 6 + 3);
+      const from = project.stars[a];
+      const to = project.stars[b];
+      positions.set(from?.position ?? [0, 0, 0], i * 6);
+      positions.set(to?.position ?? [0, 0, 0], i * 6 + 3);
+      // Each end takes its star's colour: a line glows where work happened and fades into quiet.
+      for (const [k, star] of [from, to].entries()) {
+        const heat = star?.heat ?? 'cold';
+        color.set(HEAT_COLOR[heat]).multiplyScalar(ENERGY[heat].line);
+        colors.set([color.r, color.g, color.b], i * 6 + k * 3);
+      }
     });
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     return g;
   }, [project]);
+
+  const signals = useMemo(() => {
+    const routes = signalRoutes(project);
+    const n = routes.length * SIGNAL_TRAIL;
+    const starts = new Float32Array(n * 3);
+    const ends = new Float32Array(n * 3);
+    const lengths = new Float32Array(n);
+    const phases = new Float32Array(n);
+    const speeds = new Float32Array(n);
+    const trails = new Float32Array(n);
+    const colors = new Float32Array(n * 3);
+    const brights = new Float32Array(n);
+    const color = new THREE.Color();
+    routes.forEach((r, i) => {
+      // Routes run from the hotter end: work radiates from where it happened.
+      const start = project.stars[r.from]?.position;
+      const end = project.stars[r.to]?.position;
+      if (!start || !end) return;
+      const len = Math.max(
+        0.5,
+        Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]),
+      );
+      color.set(HEAT_COLOR[r.energy]);
+      for (let k = 0; k < SIGNAL_TRAIL; k++) {
+        const j = i * SIGNAL_TRAIL + k;
+        starts.set(start, j * 3);
+        ends.set(end, j * 3);
+        lengths[j] = len;
+        // Golden-ratio phases spread the signals evenly in time; speed is per unit of length.
+        phases[j] = (i * 0.618034) % 1;
+        speeds[j] = (ENERGY[r.energy].speed * 6) / (len + 6);
+        trails[j] = k;
+        colors.set([color.r, color.g, color.b], j * 3);
+        brights[j] = ENERGY[r.energy].bright;
+      }
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(starts, 3));
+    g.setAttribute('aEnd', new THREE.BufferAttribute(ends, 3));
+    g.setAttribute('aLength', new THREE.BufferAttribute(lengths, 1));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+    g.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
+    g.setAttribute('aTrail', new THREE.BufferAttribute(trails, 1));
+    g.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+    g.setAttribute('aBright', new THREE.BufferAttribute(brights, 1));
+    // Signals sweep across the whole cluster: never cull them by the start points' bounds.
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), project.radius * 1.5);
+    return g;
+  }, [project]);
+
+  const signalMaterial = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        vertexShader: SIGNAL_VERTEX,
+        fragmentShader: SIGNAL_FRAGMENT,
+        uniforms: { uTime: { value: 0 }, uScale: { value: 300 }, uDim: { value: 1 } },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    [],
+  );
+  useEffect(() => () => signals.dispose(), [signals]);
+  useEffect(() => () => signalMaterial.dispose(), [signalMaterial]);
 
   const material = useMemo(
     () =>
@@ -341,18 +496,22 @@ function Cluster({
 
   const lineMaterial = useRef<THREE.LineBasicMaterial>(null);
   // Hundreds of links would draw a hairball: fainter the more there are.
-  const lineBase = 0.14 * Math.min(1, Math.sqrt(60 / Math.max(1, project.links.length)));
+  const lineBase = 0.26 * Math.min(1, Math.sqrt(60 / Math.max(1, project.links.length)));
   useFrame(({ clock }) => {
     const uniforms = material.uniforms as Record<string, { value: number }>;
-    if (uniforms.uTime) uniforms.uTime.value = animate ? clock.elapsedTime : 0;
-    // Point size in pixels scales with the canvas height, so stars look the same at any size.
-    if (uniforms.uScale) uniforms.uScale.value = size.height * 1.7;
+    if (uniforms.uTime) uniforms.uTime.value = animate ? shaderTime(clock.elapsedTime) : 0;
+    // Point size scales with canvas height and pixel ratio: stars look alike on any screen.
+    if (uniforms.uScale) uniforms.uScale.value = pointScale(size.height, viewport.dpr);
     const targetDim = dimmed ? 0.3 : 1;
     let settling = false;
     if (uniforms.uDim) {
       uniforms.uDim.value += (targetDim - uniforms.uDim.value) * 0.15;
       settling = Math.abs(targetDim - uniforms.uDim.value) > 0.01;
     }
+    const signal = signalMaterial.uniforms as Record<string, { value: number }>;
+    if (signal.uTime) signal.uTime.value = shaderTime(clock.elapsedTime);
+    if (signal.uScale) signal.uScale.value = pointScale(size.height, viewport.dpr);
+    if (signal.uDim) signal.uDim.value = uniforms.uDim?.value ?? 1;
     if (lineMaterial.current) {
       const targetLine = highlighted ? lineBase * 2.5 : dimmed ? lineBase * 0.3 : lineBase;
       lineMaterial.current.opacity += (targetLine - lineMaterial.current.opacity) * 0.15;
@@ -384,10 +543,12 @@ function Cluster({
   return (
     <group position={project.center}>
       <points geometry={stars} material={material} />
+      {/* Moving signals are motion: not drawn with reduced motion. */}
+      {animate && <points geometry={signals} material={signalMaterial} />}
       <lineSegments geometry={lines}>
         <lineBasicMaterial
           ref={lineMaterial}
-          color={LINK_COLOR}
+          vertexColors
           transparent
           opacity={lineBase}
           depthWrite={false}

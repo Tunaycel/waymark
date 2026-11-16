@@ -180,3 +180,36 @@ export function bounds(projects: PlacedProject[]): {
   }
   return { center: c, radius };
 }
+
+export interface SignalRoute {
+  from: number;
+  to: number;
+  /** The hotter end of the link decides how bright and fast its signals are. */
+  energy: Heat;
+}
+
+const ENERGY_RANK: Record<Heat, number> = { live: 2, warm: 1, cold: 0 };
+
+/**
+ * Links that carry travelling signals in the sky. Links touching recently changed topics go first
+ * (they are where work is flowing), then the strongest imports. A project with recent work gets
+ * many; a quiet one keeps a few slow ones so its structure still reads as alive.
+ */
+export function signalRoutes(project: PlacedProject, active = 48, quiet = 10): SignalRoute[] {
+  const routes = project.links.flatMap(([x, y], order) => {
+    const a = project.stars[x];
+    const b = project.stars[y];
+    if (!a || !b) return [];
+    // Oriented from the hotter end, so signals radiate out of where work happened.
+    const fromX = ENERGY_RANK[a.heat] >= ENERGY_RANK[b.heat];
+    const energy = fromX ? a.heat : b.heat;
+    return [{ from: fromX ? x : y, to: fromX ? y : x, energy, order }];
+  });
+  // Hotter first; links arrive strongest first, so `order` keeps that within a level.
+  routes.sort((a, b) => ENERGY_RANK[b.energy] - ENERGY_RANK[a.energy] || a.order - b.order);
+  // Every route touching recent work (up to `active`), plus at most `quiet` cold ones: one
+  // changed file must not light up the whole rest of a quiet cluster.
+  const hot = routes.filter((r) => r.energy !== 'cold').slice(0, Math.max(0, active));
+  const cold = routes.filter((r) => r.energy === 'cold').slice(0, Math.max(0, quiet));
+  return [...hot, ...cold].map(({ from, to, energy }) => ({ from, to, energy }));
+}

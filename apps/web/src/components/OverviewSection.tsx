@@ -120,7 +120,7 @@ function SkyPlaceholder({ text }: { text: string }) {
 
 function SkyLegend() {
   return (
-    <p className="pointer-events-none absolute bottom-3 left-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-faint">
+    <p className="pointer-events-none absolute bottom-3 left-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-full border border-line bg-bg/75 px-3 py-1.5 text-[11px] text-muted backdrop-blur-md">
       <span className="inline-flex items-center gap-1.5">
         <span className="size-2 rounded-full bg-live shadow-[0_0_8px_var(--live-glow)]" /> changed
         today
