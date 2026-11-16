@@ -12,3 +12,7 @@ coverage/
 
 # Local editor/agent settings
 .claude/
+
+# Key material (e.g. a GitHub App private key downloaded into the repo)
+*.pem
+*.key

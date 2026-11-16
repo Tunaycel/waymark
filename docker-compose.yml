@@ -1,4 +1,4 @@
-# Local infrastructure for development and integration tests.
+# Local infrastructure for development and integration tests, and (profile "app") the whole app.
 # Ports are offset (5433 / 6380) so they don't clash with a Postgres/Redis you may already run.
 services:
   postgres:
@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: waymark
       POSTGRES_DB: waymark
     ports:
-      - "${WAYMARK_PG_PORT:-5433}:5432"
+      # This machine only: the database holds sessions and private code structure.
+      - "127.0.0.1:${WAYMARK_PG_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,7 +22,7 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     ports:
-      - "${WAYMARK_REDIS_PORT:-6380}:6379"
+      - "127.0.0.1:${WAYMARK_REDIS_PORT:-6380}:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -29,6 +30,74 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # ── The Waymark app (profile "app"): `pnpm stack:up` runs everything below plus the databases.
+  # Development without Docker keeps using `pnpm dev` / `pnpm web` against the two services above.
+
+  migrate:
+    profiles: ["app"]
+    build: { context: ., target: app }
+    image: waymark-app
+    command: ["node", "packages/db/scripts/migrate.ts"]
+    environment:
+      DATABASE_URL: postgres://waymark:waymark@postgres:5432/waymark
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  server:
+    profiles: ["app"]
+    build: { context: ., target: app }
+    image: waymark-app
+    command: ["node", "apps/server/src/main.ts"]
+    env_file: [{ path: .env, required: false }]
+    environment:
+      DATABASE_URL: postgres://waymark:waymark@postgres:5432/waymark
+      REDIS_URL: redis://redis:6379
+      HOST: 0.0.0.0
+      PORT: "3000"
+      # Sign-in is the dashboard's business; the webhook server never needs the client secret.
+      GITHUB_APP_CLIENT_SECRET: ""
+    # Published on this machine only; a tunnel or reverse proxy exposes it (docs/DEPLOY.md).
+    ports: ["127.0.0.1:${WAYMARK_SERVER_PORT:-3000}:3000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    profiles: ["app"]
+    build: { context: ., target: app }
+    image: waymark-app
+    command: ["node", "apps/worker/src/main.ts"]
+    env_file: [{ path: .env, required: false }]
+    environment:
+      DATABASE_URL: postgres://waymark:waymark@postgres:5432/waymark
+      REDIS_URL: redis://redis:6379
+      GITHUB_APP_CLIENT_SECRET: ""
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  web:
+    profiles: ["app"]
+    build: { context: ., target: web }
+    image: waymark-web
+    # Only what the dashboard needs: no App private key, webhook secret, or AI keys (least privilege).
+    environment:
+      DATABASE_URL: postgres://waymark:waymark@postgres:5432/waymark
+      GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:-}
+      GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET:-}
+      WAYMARK_ALLOWED_USERS: ${WAYMARK_ALLOWED_USERS:-}
+      WAYMARK_SHOW_DEMOS: ${WAYMARK_SHOW_DEMOS:-}
+      WAYMARK_PUBLIC_URL: ${WAYMARK_PUBLIC_URL:-http://127.0.0.1:3100}
+      GITHUB_WEB_URL: ${GITHUB_WEB_URL:-https://github.com}
+      GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+    ports: ["127.0.0.1:${WAYMARK_WEB_PORT:-3100}:3100"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
 
 volumes:
   pgdata:
