@@ -214,6 +214,46 @@ describe('installation events', () => {
     expect(res.statusCode).toBe(503);
   });
 
+  it('schedules hiding the repositories of an uninstalled App, once per delivery', async () => {
+    const enqueueDetach = vi.fn(async () => ({ jobId: 'detach-d1', status: 'queued' as const }));
+    const app = buildApp({
+      webhookSecret: secret,
+      enqueuePush: async () => ({ jobId: 'x', status: 'queued' }),
+      enqueueIndex: vi.fn(async () => {}),
+      enqueueDetach,
+    });
+    const res = await deliver(
+      app,
+      'installation',
+      { action: 'deleted', installation: { id: 7 } },
+      { delivery: 'd1' },
+    );
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ status: 'queued' });
+    expect(enqueueDetach).toHaveBeenCalledWith({
+      deliveryId: 'd1',
+      installationId: 7,
+      githubIds: null,
+    });
+  });
+
+  it('answers 503 when hiding cannot be scheduled, so GitHub can redeliver', async () => {
+    const app = buildApp({
+      webhookSecret: secret,
+      enqueuePush: async () => ({ jobId: 'x', status: 'queued' }),
+      enqueueIndex: vi.fn(async () => {}),
+      enqueueDetach: vi.fn(async () => {
+        throw new Error('redis down');
+      }),
+    });
+    const res = await deliver(app, 'installation_repositories', {
+      action: 'removed',
+      installation: { id: 7 },
+      repositories_removed: [{ id: 3, full_name: 'octo/c' }],
+    });
+    expect(res.statusCode).toBe(503);
+  });
+
   it('still requires a valid signature', async () => {
     const { app, enqueueIndex } = installApp();
     const res = await deliver(app, 'installation', { action: 'created' }, { signature: null });

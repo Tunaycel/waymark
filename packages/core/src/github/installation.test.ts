@@ -32,10 +32,34 @@ describe('parseInstallationEvent', () => {
     });
   });
 
+  it('detaches every repository of an uninstalled App', () => {
+    expect(
+      parseInstallationEvent('installation', { action: 'deleted', installation: { id: 7 } }),
+    ).toEqual({ kind: 'detach', installationId: 7, githubIds: null });
+  });
+
+  it('detaches only the repositories removed from an installation', () => {
+    const payload = {
+      action: 'removed',
+      installation: { id: 7 },
+      repositories_added: [],
+      repositories_removed: [repo(3, 'octo/c'), repo(4, 'octo/d')],
+    };
+    expect(parseInstallationEvent('installation_repositories', payload)).toEqual({
+      kind: 'detach',
+      installationId: 7,
+      githubIds: [3, 4],
+    });
+  });
+
   it('skips other actions and malformed payloads', () => {
+    expect(parseInstallationEvent('installation', { action: 'suspend' })).toEqual({
+      kind: 'skip',
+      reason: 'unhandled_action:suspend',
+    });
     expect(parseInstallationEvent('installation', { action: 'deleted' })).toEqual({
       kind: 'skip',
-      reason: 'unhandled_action:deleted',
+      reason: 'invalid_payload',
     });
     expect(parseInstallationEvent('installation', { action: 'created' })).toEqual({
       kind: 'skip',

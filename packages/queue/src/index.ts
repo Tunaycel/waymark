@@ -11,7 +11,17 @@ import { Redis } from 'ioredis';
 
 export const GITHUB_EVENTS_QUEUE = 'github-events';
 
-export type GitHubEventJob = { type: 'push'; payload: PushJob };
+/** The App lost access to repositories (uninstalled, or repositories removed from it). */
+export interface DetachJob {
+  deliveryId: string;
+  installationId: number;
+  /** null: every repository of the installation. */
+  githubIds: number[] | null;
+}
+
+export type GitHubEventJob =
+  | { type: 'push'; payload: PushJob }
+  | { type: 'detach'; payload: DetachJob };
 
 /** Retry transient failures (DB/Redis blips) with exponential backoff: 2s, 4s, 8s, 16s, 32s. */
 export const defaultJobOptions: JobsOptions = {
@@ -80,12 +90,30 @@ export type EnqueueOutcome = { jobId: string; status: 'queued' | 'duplicate' | '
  *   GitHub gives you ("Redeliver") would be silently swallowed for as long as the failed job is kept.
  *   Reprocessing is safe because ingestion is idempotent.
  */
-export async function enqueuePush(
+export function enqueuePush(
   queue: Queue<GitHubEventJob>,
   job: PushJob,
   timeoutMs = ENQUEUE_TIMEOUT_MS,
 ): Promise<EnqueueOutcome> {
-  const jobId = jobIdForDelivery('push', job.deliveryId);
+  return enqueueEvent(queue, { type: 'push', payload: job }, job.deliveryId, timeoutMs);
+}
+
+/** Same delivery guarantees as a push: once per delivery, a failed one requeued on redelivery. */
+export function enqueueDetach(
+  queue: Queue<GitHubEventJob>,
+  job: DetachJob,
+  timeoutMs = ENQUEUE_TIMEOUT_MS,
+): Promise<EnqueueOutcome> {
+  return enqueueEvent(queue, { type: 'detach', payload: job }, job.deliveryId, timeoutMs);
+}
+
+async function enqueueEvent(
+  queue: Queue<GitHubEventJob>,
+  event: GitHubEventJob,
+  deliveryId: string,
+  timeoutMs: number,
+): Promise<EnqueueOutcome> {
+  const jobId = jobIdForDelivery(event.type, deliveryId);
   return withTimeout(timeoutMs, async () => {
     const existing = await queue.getJob(jobId);
     if (existing) {
@@ -99,7 +127,7 @@ export async function enqueuePush(
       }
       return { jobId, status: 'duplicate' };
     }
-    await queue.add('push', { type: 'push', payload: job }, { jobId });
+    await queue.add(event.type, event, { jobId });
     return { jobId, status: 'queued' };
   });
 }

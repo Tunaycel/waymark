@@ -3,6 +3,7 @@ import {
   createGitHubEventsQueue,
   createIndexQueue,
   createRedisHealthCheck,
+  enqueueDetach,
   enqueueIndex,
   enqueuePush,
 } from '@waymark/queue';
@@ -30,6 +31,7 @@ const app = buildApp({
   enqueueIndex: async (jobs) => {
     await Promise.all(jobs.map((job) => enqueueIndex(indexQueue, job, 0)));
   },
+  enqueueDetach: (job) => enqueueDetach(queue, job),
   isReady: redisHealth.isReady,
   logger: { level: env.LOG_LEVEL },
   trustProxyHops: env.TRUST_PROXY_HOPS,
