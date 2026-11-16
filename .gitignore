@@ -9,3 +9,6 @@ coverage/
 !.env.example
 .DS_Store
 *.tsbuildinfo
+
+# Local editor/agent settings
+.claude/

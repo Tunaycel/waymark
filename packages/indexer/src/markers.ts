@@ -3,7 +3,10 @@ import type { Comment, Marker, MarkerKind } from './types.ts';
 // `s` flag: `.` also matches `\r` and other line terminators, so the match can't fail at the end
 // and backtrack through every marker on the line (CRLF files lost all markers, and lines with many
 // markers were quadratic).
-const MARKER = /\b(TODO|FIXME|HACK|XXX|BUG)\b(?:\([^)\n]*\))?[:\s-]*(.*)/s;
+// Not joined to another word by `/` or `-` ("TODO/FIXME markers", "TODO-list"): such text talks
+// about markers rather than being one. A ticket number ("TODO-1234: ...") is still a marker.
+const MARKER =
+  /(?<![/\\-])\b(TODO|FIXME|HACK|XXX|BUG)\b(?![/\\]|-[A-Za-z])(?:\([^)\n]*\))?[:\s-]*(.*)/s;
 const MAX_TEXT = 200;
 
 /** Cuts at a code-point boundary: slicing UTF-16 units can split an emoji into invalid text. */

@@ -74,6 +74,8 @@ export const commits = pgTable(
     uniqueIndex('commits_repository_sha_key').on(t.repositoryId, t.sha),
     // "What did I do today / where did I leave off" reads commits newest-first per repository.
     index('commits_repository_committed_at_idx').on(t.repositoryId, t.committedAt.desc()),
+    // The dashboard's recent activity: what this server received in the last days, newest first.
+    index('commits_repository_ingested_at_idx').on(t.repositoryId, t.ingestedAt.desc()),
   ],
 );
 
@@ -129,7 +131,11 @@ export const snapshotFiles = pgTable(
     /** Stable id of the topic the file belongs to (set when topics are built). */
     topicId: text('topic_id'),
   },
-  (t) => [primaryKey({ columns: [t.snapshotId, t.path] })],
+  (t) => [
+    primaryKey({ columns: [t.snapshotId, t.path] }),
+    // A topic's files (the dashboard's side panel).
+    index('snapshot_files_topic_idx').on(t.snapshotId, t.topicId),
+  ],
 );
 
 /** File-level import graph of a snapshot (`from` imports `to`). */

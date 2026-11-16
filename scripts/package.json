@@ -7,13 +7,17 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "bench": "node --env-file-if-exists=../.env bench-webhook.ts",
-    "bench:index": "node --expose-gc --env-file-if-exists=../.env bench-index.ts"
+    "bench:index": "node --expose-gc --env-file-if-exists=../.env bench-index.ts",
+    "demo": "node --env-file-if-exists=../.env demo.ts"
   },
   "devDependencies": {
     "@waymark/core": "workspace:*",
     "@waymark/db": "workspace:*",
     "@waymark/indexer": "workspace:*",
+    "@waymark/mapper": "workspace:*",
+    "@waymark/worker": "workspace:*",
     "drizzle-orm": "^0.45.4",
+    "pino": "^10.4.0",
     "postgres": "^4.1.1"
   }
 }
