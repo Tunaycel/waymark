@@ -18,6 +18,27 @@ export const ACTIVITY_WINDOW_DAYS = 30;
 const RECENT_COMMIT_LIMIT = 2_000;
 /** Files listed in a topic's side panel; the full count is reported separately. */
 export const TOPIC_FILE_LIMIT = 500;
+/** Largest topics drawn per project in the overview; the rest are on the project's own map. */
+export const CONSTELLATION_STARS = 360;
+const CONSTELLATION_LINKS = 600;
+
+/**
+ * A topic as a star in the overview: only what the sky draws. Names, ids, and roles stay on the
+ * server; the home page ships this for every project, also to viewers who never see the sky.
+ */
+export interface Star {
+  lines: number;
+  /** Newest change within the activity window, ISO; null when quiet. */
+  lastChangedAt: string | null;
+}
+
+/** One project's stars and the strongest imports between them, as index pairs into `stars`. */
+export interface Constellation {
+  stars: Star[];
+  links: [number, number][];
+  /** Topics not drawn because the project has more than `CONSTELLATION_STARS`. */
+  hidden: number;
+}
 
 export interface RepositoryCard {
   id: string;
@@ -39,6 +60,7 @@ export interface RepositoryCard {
   commits7d: number;
   /** Most recently changed topics (by name), newest first. */
   activeTopics: string[];
+  constellation: Constellation;
 }
 
 /** The latest snapshot of a repository that has topics, else its latest snapshot. */
@@ -117,6 +139,7 @@ export async function listRepositoryCards(db: Database): Promise<RepositoryCard[
     let topicCount = 0;
     let activeTopics: string[] = [];
     let commits7d = 0;
+    let constellation: Constellation = { stars: [], links: [], hidden: 0 };
     if (snap) {
       const [count] = await db
         .select({ n: sql<number>`count(*)::int` })
@@ -140,6 +163,7 @@ export async function listRepositoryCards(db: Database): Promise<RepositoryCard[
         const byId = new Map(names.map((n) => [n.id, n.name]));
         activeTopics = recentTopicIds.map((id) => byId.get(id)).filter((n): n is string => !!n);
       }
+      constellation = await constellationOf(db, snap.id, topicCount, activity);
     }
     const summary = snap?.summary;
     cards.push({
@@ -166,9 +190,62 @@ export async function listRepositoryCards(db: Database): Promise<RepositoryCard[
         : null,
       commits7d,
       activeTopics,
+      constellation,
     });
   }
   return cards;
+}
+
+/** The overview's stars for one snapshot: its largest topics, glowing by recent activity. */
+async function constellationOf(
+  db: Database,
+  snapshotId: string,
+  topicCount: number,
+  activity: { ingestedAt: Date; topics: string[] }[],
+): Promise<Constellation> {
+  const topics = await db
+    .select({ id: snapshotTopics.topicId, lines: snapshotTopics.lineCount })
+    .from(snapshotTopics)
+    .where(eq(snapshotTopics.snapshotId, snapshotId))
+    .orderBy(desc(snapshotTopics.lineCount), snapshotTopics.topicId)
+    .limit(CONSTELLATION_STARS);
+  if (topics.length === 0) return { stars: [], links: [], hidden: 0 };
+
+  const lastChanged = new Map<string, Date>();
+  for (const c of activity) {
+    for (const t of c.topics) if (!lastChanged.has(t)) lastChanged.set(t, c.ingestedAt); // newest first
+  }
+  const index = new Map(topics.map((t, i) => [t.id, i]));
+  const ids = [...index.keys()];
+  const edges = await db
+    .select({ from: snapshotTopicEdges.fromTopic, to: snapshotTopicEdges.toTopic })
+    .from(snapshotTopicEdges)
+    .where(
+      and(
+        eq(snapshotTopicEdges.snapshotId, snapshotId),
+        inArray(snapshotTopicEdges.fromTopic, ids),
+        inArray(snapshotTopicEdges.toTopic, ids),
+      ),
+    )
+    .orderBy(
+      desc(snapshotTopicEdges.weight),
+      snapshotTopicEdges.fromTopic,
+      snapshotTopicEdges.toTopic,
+    )
+    .limit(CONSTELLATION_LINKS);
+
+  return {
+    stars: topics.map((t) => ({
+      lines: t.lines,
+      lastChangedAt: lastChanged.get(t.id)?.toISOString() ?? null,
+    })),
+    links: edges.flatMap((e): [number, number][] => {
+      const from = index.get(e.from);
+      const to = index.get(e.to);
+      return from === undefined || to === undefined || from === to ? [] : [[from, to]];
+    }),
+    hidden: Math.max(0, topicCount - topics.length),
+  };
 }
 
 export interface MapTopic {

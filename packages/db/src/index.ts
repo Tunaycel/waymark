@@ -1,6 +1,8 @@
 export { createDatabase, type Database, type DatabaseHandle } from './client.ts';
 export {
   ACTIVITY_WINDOW_DAYS,
+  CONSTELLATION_STARS,
+  type Constellation,
   findRepository,
   listRepositoryCards,
   type MapTopic,
@@ -8,6 +10,7 @@ export {
   type RepositoryCard,
   type RepositoryMap,
   repositoryMap,
+  type Star,
   type TopicDetail,
   topicDetail,
 } from './dashboard.ts';

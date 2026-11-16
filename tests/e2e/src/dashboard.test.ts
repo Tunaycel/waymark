@@ -124,6 +124,19 @@ describe('dashboard read models → Postgres', () => {
     expect(card).toMatchObject({ fullName: 'Octo/Shop', commits7d: 3 });
     expect(card?.snapshot).toMatchObject({ id: snapshotId, topicCount: 2, markerCount: 1 });
     expect(card?.activeTopics).toHaveLength(2);
+
+    // The overview's stars: every topic (fewer than the cap), glowing where commits touched them.
+    const stars = card?.constellation.stars ?? [];
+    expect(stars).toHaveLength(2);
+    expect(card?.constellation.hidden).toBe(0);
+    expect(stars.every((s) => s.lastChangedAt !== null)).toBe(true);
+    for (const [from, to] of card?.constellation.links ?? []) {
+      expect(stars[from]).toBeDefined();
+      expect(stars[to]).toBeDefined();
+      expect(from).not.toBe(to);
+    }
+    // Only what the sky draws leaves the server: no topic names or ids.
+    expect(Object.keys(stars[0] ?? {}).sort()).toEqual(['lastChangedAt', 'lines']);
   });
 
   it('returns a topic panel with its files, TODOs, and recent commits only', async () => {
