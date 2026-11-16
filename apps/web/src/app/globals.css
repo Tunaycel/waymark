@@ -126,3 +126,20 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
 }
+
+/* A new layout fades in instead of jumping. */
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.react-flow__node > * {
+  animation: node-in 240ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node > * {
+    animation: none;
+  }
+}

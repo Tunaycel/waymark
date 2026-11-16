@@ -1,12 +1,16 @@
 import { listRepositoryCards, type RepositoryCard } from '@waymark/db';
 import { GitCommitHorizontal, Lock, Network, StickyNote } from 'lucide-react';
 import Link from 'next/link';
+import { OverviewSection } from '@/components/OverviewSection';
 import { db } from '@/lib/db';
 import { compact, timeAgo } from '@/lib/format';
 import { mapHref } from '@/lib/paths';
 
 // Always read fresh data: the dashboard is a live view of the database.
 export const dynamic = 'force-dynamic';
+
+/** Projects drawn in the sky. Beyond this it stops being readable (and costs page weight). */
+const OVERVIEW_PROJECTS = 60;
 
 export default async function Home() {
   const cards = await listRepositoryCards(db());
@@ -28,6 +32,20 @@ export default async function Home() {
           </p>
         )}
       </section>
+
+      <OverviewSection
+        // The most recently pushed projects; all of them stay in the list below.
+        projects={cards
+          .filter((c) => c.constellation.stars.length > 0)
+          .slice(0, OVERVIEW_PROJECTS)
+          .map((c) => ({
+            id: c.id,
+            fullName: c.fullName,
+            commits7d: c.commits7d,
+            topicCount: c.snapshot?.topicCount ?? 0,
+            constellation: c.constellation,
+          }))}
+      />
 
       {cards.length === 0 ? (
         <EmptyState />

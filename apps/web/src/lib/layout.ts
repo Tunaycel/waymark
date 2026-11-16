@@ -15,7 +15,7 @@ export interface Positioned {
   parent: string | null;
 }
 
-interface ElkLike {
+export interface ElkLike {
   layout(graph: ElkNode): Promise<ElkNode>;
 }
 

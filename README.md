@@ -54,12 +54,16 @@ reasoning behind each decision, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.m
 
 <!-- screenshots -->
 <p align="center">
-  <img src="docs/images/map-django.png" alt="django/django: 150 AI-named topics grouped by directory, live import edges" width="100%">
+  <img src="docs/images/overview.png" alt="Welcome screen: three projects as constellations of topics, the one changed this week glowing, project cards below" width="100%">
 </p>
 
 | | |
 |---|---|
-| <img src="docs/images/projects.png" alt="Project list with weekly activity and TODO counts"> | <img src="docs/images/topic-panel.png" alt="Topic panel: AI summary, dependencies, TODOs, recent commits, files"> |
+| <img src="docs/images/map-django.png" alt="django/django: 150 AI-named topics grouped by directory, live import edges"> | <img src="docs/images/topic-panel.png" alt="Topic panel: AI summary, dependencies, TODOs, recent commits, files"> |
+
+The welcome screen shows every project as a constellation: one star per topic, glowing where you
+worked today or this week, with signals running along the imports from where work happened. Drag
+to orbit, click a project to open its map.
 
 Each project is a map: topics are nodes, imports are edges, and topics changed in the last day or
 week glow. Large repositories open as a handful of regions (packages, or directories inside one)
@@ -150,7 +154,7 @@ browser):
 
 | Quality gate | Value |
 |---|---|
-| Unit tests | 276 (no infrastructure required), incl. timed adversarial-input regressions |
+| Unit tests | 301 (no infrastructure required), incl. timed adversarial-input regressions |
 | Integration tests | 40 (real Postgres + Redis, in a separate `<db>_test` database; incl. failure recovery, index scheduling, topic building, budget across workers, dashboard read models) |
 | Type safety | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` |
 | Build step | none: Node runs the TypeScript sources directly |

@@ -14,7 +14,6 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from '@xyflow/react';
-import ELK from 'elkjs/lib/elk.bundled.js';
 import { Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { heatOf, ROLE_LABELS } from '@/lib/format';
@@ -32,11 +31,9 @@ import {
   type VisibleGraph,
   visibleGraph,
 } from '@/lib/graph';
-import { layoutGraph } from '@/lib/layout';
+import { createLayouter, type Layouter, Superseded } from '@/lib/layout-client';
 import { nodeTypes } from './nodes';
 import { TopicPanel } from './TopicPanel';
-
-const elk = new ELK();
 
 /** Zoom used when centring on one topic: close enough to read it, with its neighbours around. */
 const FOCUS_FIT = { padding: 1.6, maxZoom: 0.9 };
@@ -76,16 +73,55 @@ function Canvas({ map, initialTopic }: { map: RepositoryMap; initialTopic?: stri
   const [query, setQuery] = useState('');
   // Bumped on every new layout: remounting the canvas lets its built-in fit run on measured nodes.
   const [layoutVersion, setLayoutVersion] = useState(0);
+  const refocusAfterLayout = useRef(false);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  // After a keyboard expansion, focus the first node that opened (not the page body, which is
+  // where focus falls when the old canvas unmounts).
+  useEffect(() => {
+    if (!refocusAfterLayout.current || !laidOut) return;
+    refocusAfterLayout.current = false;
+    const first = laidOut.fitTo.find(
+      (id) =>
+        !id.startsWith('r:') || laidOut.nodes.some((n) => n.id === id && n.type === 'collapsed'),
+    );
+    const target = first ?? laidOut.fitTo[0];
+    if (!target) return;
+    // The remounted canvas renders its nodes a few frames later: wait for the node, briefly.
+    let frames = 0;
+    let handle: ReturnType<typeof setTimeout> | undefined;
+    const tryFocus = () => {
+      const el = canvasRef.current?.querySelector<HTMLElement>(
+        `.react-flow__node[data-id="${CSS.escape(target)}"]`,
+      );
+      if (el) el.focus({ preventScroll: true });
+      else if (++frames < 60) handle = setTimeout(tryFocus, 16);
+    };
+    handle = setTimeout(tryFocus, 0);
+    return () => clearTimeout(handle);
+  }, [laidOut]);
   const searchRef = useRef<HTMLInputElement>(null);
   const topicsById = useMemo(() => new Map(map.topics.map((t) => [t.id, t])), [map]);
 
   const graph = useMemo(() => visibleGraph(map, collapsed), [map, collapsed]);
 
+  // Layout runs in a Web Worker, so even a large map never blocks scrolling or typing.
+  const layouter = useRef<Layouter | null>(null);
+  useEffect(() => {
+    layouter.current = createLayouter();
+    return () => {
+      layouter.current?.dispose();
+      layouter.current = null;
+    };
+  }, []);
+
   // Layout whenever the visible structure changes (expand/collapse), not on hover or selection.
   useEffect(() => {
     let cancelled = false;
     setLayoutError(false);
-    layoutGraph(elk, graph)
+    // Effects run in order, but Strict Mode's remount can leave it disposed: recreate on demand.
+    layouter.current ??= createLayouter();
+    layouter.current
+      .layout(graph)
       .then((positions) => {
         if (cancelled) return;
         const nodes: Node[] = graph.nodes.map((n) => {
@@ -101,17 +137,24 @@ function Canvas({ map, initialTopic }: { map: RepositoryMap; initialTopic?: stri
               ...base,
               type: 'region',
               selectable: false,
+              focusable: false,
               style: { width: p?.width, height: p?.height },
               zIndex: -1,
               data: { label: n.label, topicCount: n.topicCount, dimmed: false },
             };
           }
           if (n.kind === 'collapsed') {
-            return { ...base, type: 'collapsed', data: { ...n, dimmed: false } };
+            return {
+              ...base,
+              type: 'collapsed',
+              ariaLabel: `${n.label}: ${n.topicCount} topics. Press Enter to open.`,
+              data: { ...n, dimmed: false },
+            };
           }
           return {
             ...base,
             type: 'topic',
+            ariaLabel: `${n.topic.name}: ${n.topic.fileCount + n.topic.testCount} files. Press Enter for details.`,
             data: { topic: n.topic, caption: n.caption, dimmed: false, selected: false },
           };
         });
@@ -123,7 +166,7 @@ function Canvas({ map, initialTopic }: { map: RepositoryMap; initialTopic?: stri
         setLayoutVersion((v) => v + 1);
       })
       .catch((error: unknown) => {
-        if (cancelled) return;
+        if (cancelled || error instanceof Superseded) return;
         console.error('map layout failed', error);
         setLayoutError(true);
       });
@@ -268,7 +311,7 @@ function Canvas({ map, initialTopic }: { map: RepositoryMap; initialTopic?: stri
   const allRegions = useMemo(() => collapsibleIds(map), [map]);
   // A full layout of a large map blocks the page for seconds: open it one level per click.
   const stepwise = map.topics.length > EXPAND_ALL_LIMIT;
-  // What the expand button would show, if laying it out stays fast (ELK runs on this thread).
+  // What the expand button would show, if the result stays readable and quick to lay out.
   const expansion = useMemo(() => {
     if (collapsed.size === 0) return null;
     const next = stepwise ? expandOneLevel(map, collapsed) : new Set<string>();
@@ -276,7 +319,22 @@ function Canvas({ map, initialTopic }: { map: RepositoryMap; initialTopic?: stri
   }, [map, collapsed, stepwise]);
 
   return (
-    <div className="relative min-h-0 flex-1">
+    // Keyboard: Tab moves between topics and regions, Enter or Space acts like a click.
+    // biome-ignore lint/a11y/noStaticElementInteractions: delegates keys for the focusable nodes inside.
+    <div
+      ref={canvasRef}
+      className="relative min-h-0 flex-1"
+      onKeyDown={(e) => {
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.repeat) return;
+        const el = (e.target as HTMLElement).closest<HTMLElement>('.react-flow__node');
+        const node = el?.dataset.id ? flow.getNode(el.dataset.id) : undefined;
+        if (!node || node.type === 'region') return;
+        e.preventDefault();
+        // Opening a region remounts the canvas; give focus back to what opened afterwards.
+        if (node.type === 'collapsed') refocusAfterLayout.current = true;
+        onNodeClick(e, node);
+      }}
+    >
       <ReactFlow
         key={layoutVersion}
         fitView

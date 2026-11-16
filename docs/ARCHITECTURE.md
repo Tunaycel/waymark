@@ -321,7 +321,8 @@ Costs are for the first build. Later builds re-describe only topics that changed
 
 A local web app (`apps/web`, Next.js 16 App Router) that reads the same Postgres the worker
 writes. Pages are server components that query `packages/db/src/dashboard.ts` directly; the map
-itself is a client component (React Flow 12, ELK layered layout). It binds to `127.0.0.1` and has no
+itself is a client component (React Flow 12, ELK layered layout in a Web Worker), and the welcome
+screen draws every project as a 3D constellation (three.js). It binds to `127.0.0.1` and has no
 authentication yet, so it is for your own machine only; hosted access comes with sign-in later.
 
 ```mermaid
@@ -329,7 +330,7 @@ flowchart LR
   DB[("Postgres")] --> RM["dashboard.ts<br/>latest snapshot with topics<br/>+ commits of the last 30 days"]
   RM --> P["Server component<br/>serialises one RepositoryMap"]
   P --> G["graph.ts (pure)<br/>regions · groups · collapse<br/>edge aggregation + pruning"]
-  G --> L["layout.ts<br/>ELK layered, left → right"]
+  G --> L["layout.worker.ts<br/>ELK layered, left → right<br/>off the main thread"]
   L --> RF["React Flow canvas<br/>focus · search · panel"]
   RF -->|"topic click"| API["/api/topic<br/>files · TODOs · commits"]
   API --> DB
@@ -341,7 +342,7 @@ flowchart LR
 |---|---|---|
 | A package with 150 topics is one blob | Packages over 24 topics are split by directory; a level every topic shares is skipped; areas still over 24 are split one level deeper | `regions()` |
 | A monorepo has hundreds of packages and fixtures | Over 32 regions, regions are grouped by the finest directory level that keeps ≤ 32 entries, recursively; siblings no directory separates are cut into about √n alphabetical ranges ("k00 … k06"), so no expansion ever shows more than 32 entries | `regionEntries()` · `bucket()` |
-| Laying out everything freezes the tab | ELK runs on the main thread (~4 s for 300 nodes on next.js), so "Expand all" becomes "Expand a level" above 300 topics and stops when the next level would exceed 250 nodes; clicking a region or searching still opens anything | `expandOneLevel()` · `MAX_VISIBLE_NODES` |
+| Laying out a large view freezes the tab | ELK runs in a Web Worker; a newer request terminates the busy worker instead of queueing behind it. Above 300 topics "Expand all" becomes "Expand a level", which stops before 600 visible nodes (drawing, not layout, is the limit then); clicking a region or searching still opens anything | `layout-client.ts` · `expandOneLevel()` · `MAX_VISIBLE_NODES` |
 | The first view of a big repository | Over 60 topics, every group and every region with more than two topics starts collapsed; a collapsed node shows its topic, file, and TODO counts and when it last changed | `initialCollapsed()` |
 | 2,000 import edges are a hairball | Edges are summed onto whatever is visible (a collapsed region is one endpoint) and pruned to each node's 3 strongest; the selected topic always shows all of its edges | `visibleGraph()` · `pruneEdges()` |
 | Finding one topic among 900 | Search ranks name prefix > name substring > directory or summary; choosing a result expands its group path, re-lays out, and centres on it | `searchTopics()` · `containersOfTopic()` |
@@ -375,6 +376,39 @@ search ranking); `layout.test.ts` checks children stay inside their region, depe
 to right, and malformed input is laid out instead of throwing. The read models are tested against
 Postgres in `tests/e2e/src/dashboard.test.ts` (snapshot choice, 30-day window, case-insensitive
 lookup, a 3,000-file commit, foreign snapshots).
+
+### The overview: projects as constellations (1c-2)
+
+Each project is a cluster of stars, one per topic (its 360 largest), with its strongest imports as
+faint lines. Stars changed today glow sky-blue and pulse, this week's glow teal, quiet ones stay dim.
+The layout is pure and deterministic (`constellation.ts`), so a project keeps its place in the sky:
+
+- **Clusters** sit on a golden-angle spiral, most recently pushed first, each at the first spot that
+  overlaps no earlier one; a cluster's radius grows with the cube root of its topic count.
+- **Stars** fill a ball evenly, largest at the inner part. Linked stars are drawn together by springs
+  with a rest length, and a hub's pull is divided by its link count, so a topic that everything
+  imports doesn't swallow its neighbours into one white blot.
+- **Signals** run along links as short streaks, from the end that changed most recently outward:
+  fast and bright where work happened today, calmer this week; a quiet project keeps up to 10
+  slow ones. Links take the colour of their ends, glowing where work is and fading into quiet.
+  Stars are crisp discs with a short glow, antialiased in the shader (no canvas supersampling),
+  sized by the screen's pixel ratio and capped so flying into a cluster never floods the screen.
+- **Labels** are real links positioned over their clusters every frame and pushed apart where they
+  would overlap, so the sky is usable by keyboard and screen readers.
+- **Fallbacks:** without WebGL there is no sky; with `prefers-reduced-motion` it starts hidden (and
+  never rotates or pulses when shown). A toggle remembers the choice. The project cards are always
+  there below. three.js (~250 KB gzipped) loads only when the sky is shown, and a crash inside the
+  sky (no GPU context, a chunk that fails to load) hides it instead of taking the page down.
+- **Cost:** the page ships only what the sky draws per star (its size and when it last changed,
+  no names), for the 60 most recently pushed projects. Off screen the sky renders no frames; with
+  reduced motion it renders only when something changes. 500 projects place in ~0.4 s.
+
+### Measured (1c-2)
+
+| What | Before | After |
+|---|---|---|
+| Expand one level of vercel/next.js (16 → 113 nodes) | ~1.8 s with the page frozen | 0.4–0.9 s, longest frame ~110 ms |
+| Expand to 595 nodes | refused (would freeze for > 10 s) | 1.6 s, longest frame ~260 ms |
 
 ## 7. Engines (planned)
 
