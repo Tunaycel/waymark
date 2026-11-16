@@ -26,7 +26,10 @@
     "topics:local": "pnpm --filter @waymark/mapper topics",
     "check:text": "node scripts/check-text.mjs",
     "demo": "pnpm --filter @waymark/scripts demo",
-    "web": "pnpm --filter @waymark/web dev"
+    "web": "pnpm --filter @waymark/web dev",
+    "stack:up": "docker compose --profile app up -d --build --wait",
+    "stack:down": "docker compose --profile app down",
+    "stack:logs": "docker compose --profile app logs -f server worker web"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",

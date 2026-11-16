@@ -29,6 +29,13 @@
       "when": 1794699251464,
       "tag": "0003_dashboard_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794835198351,
+      "tag": "0004_users_sessions",
+      "breakpoints": true
     }
   ]
 }

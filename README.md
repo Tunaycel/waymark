@@ -96,6 +96,7 @@ Each guarantee below is enforced in code **and** pinned by a test.
 | Topics are deterministic and stable | Deterministic Louvain within package boundaries; ids carried over by file overlap, so small changes keep the same map node | [`topics.test.ts`](packages/mapper/src/topics.test.ts) |
 | Repository content is data, never code | Nothing is executed; symlinks and paths outside the archive root are skipped; text Postgres rejects (NUL, broken surrogates) is cleaned | [`sources.test.ts`](packages/indexer/src/sources/sources.test.ts) · `indexing.test.ts` |
 | Other websites can't read the local dashboard | Loopback-only bind plus a `Host` check against DNS rebinding; the web process gets `DATABASE_URL` and no API keys; a topic panel only answers for a snapshot of the repository asked for | [`paths.test.ts`](apps/web/src/lib/paths.test.ts) · [`dashboard.test.ts`](tests/e2e/src/dashboard.test.ts) |
+| Only people you allow see your projects | Sign in with GitHub through the App; an allowlist decides who gets in; every page, API call, and query is scoped to the repositories the viewer can open on GitHub; sessions are 24-hour random tokens stored as SHA-256 hashes; the allowlist is checked on every request; the GitHub token is never stored and is revoked after sign-in; half-configured setups refuse to start instead of opening up | [`config.test.ts`](apps/web/src/lib/config.test.ts) · [`auth.test.ts`](tests/e2e/src/auth.test.ts) · [`oauth.test.ts`](packages/github/src/oauth.test.ts) |
 | Tests never touch your data | Integration tests run in their own `<db>_test` database and refuse any database not named `*_test` | [`helpers.ts`](tests/e2e/src/helpers.ts) |
 | Misconfiguration fails at startup, all at once | zod-validated environment, every problem reported together | [`env.test.ts`](packages/core/src/env.test.ts) |
 
@@ -154,32 +155,48 @@ browser):
 
 | Quality gate | Value |
 |---|---|
-| Unit tests | 301 (no infrastructure required), incl. timed adversarial-input regressions |
-| Integration tests | 40 (real Postgres + Redis, in a separate `<db>_test` database; incl. failure recovery, index scheduling, topic building, budget across workers, dashboard read models) |
+| Unit tests | 338 (no infrastructure required), incl. timed adversarial-input regressions |
+| Integration tests | 52 (real Postgres + Redis, in a separate `<db>_test` database; incl. failure recovery, index scheduling, topic building, budget across workers, dashboard read models, sessions and per-viewer scope) |
 | Type safety | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` |
 | Build step | none: Node runs the TypeScript sources directly |
 <!-- metrics:end -->
 
 ## Quick start
 
-**Requirements:** Node ≥ 22.18, pnpm 10, Docker.
+**Everything in Docker** (only Docker needed):
 
 ```bash
 git clone https://github.com/Tunaycel/waymark.git && cd waymark
+cp .env.example .env          # then fill it in (see below)
+docker compose --profile app up -d --build --wait
+```
+
+This runs Postgres, Redis, migrations, the webhook server (`127.0.0.1:3000`), the worker, and the
+dashboard (`127.0.0.1:3100`). Everything, databases included, listens on this machine only; no
+key material enters the images, and the dashboard container gets only its own settings; `pnpm stack:logs` follows
+the logs and `pnpm stack:down` stops it.
+
+**For development** (Node ≥ 22.18, pnpm 10, Docker for the databases):
+
+```bash
 pnpm install
 cp .env.example .env          # then set GITHUB_WEBHOOK_SECRET
 pnpm infra:up                 # Postgres :5433, Redis :6380
 pnpm db:migrate
 pnpm dev                      # server on :3000 + worker
+pnpm web                      # dashboard on :3100
 ```
 
 Then connect a GitHub App by following [docs/GITHUB_APP.md](docs/GITHUB_APP.md). Indexing
 needs the App's ID and private key in `.env`; without them, pushes are still ingested. For AI topic
 names, add `ANTHROPIC_API_KEY` (or `OLLAMA_MODEL` for a free local model); without either, topics
-get heuristic names.
+get heuristic names. To sign in to the dashboard with GitHub (required before it can be reached
+from anywhere but this machine), add the App's client ID and secret and your login to
+`WAYMARK_ALLOWED_USERS`; see the same document.
 
 | Command | What it does |
 |---|---|
+| `pnpm stack:up` / `stack:down` / `stack:logs` | The whole app in Docker |
 | `pnpm test` | Unit tests |
 | `pnpm test:integration` | End-to-end against real Postgres + Redis (`pnpm infra:up` first) |
 | `pnpm lint` / `pnpm lint:fix` | Biome lint and format |

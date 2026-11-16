@@ -3,6 +3,7 @@ import { ChevronLeft } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { MapView } from '@/components/MapView';
+import { requireScope } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { compact, timeAgo } from '@/lib/format';
 import { nameFromSegments } from '@/lib/paths';
@@ -19,7 +20,8 @@ export default async function RepositoryPage({
   const { name } = await params;
   const { topic } = await searchParams;
   const fullName = nameFromSegments(name);
-  const map = fullName === null ? null : await repositoryMap(db(), fullName);
+  const scope = await requireScope();
+  const map = fullName === null ? null : await repositoryMap(db(), fullName, scope);
   if (!map) notFound();
 
   const named = map.topics.filter((t) => t.source === 'ai').length;

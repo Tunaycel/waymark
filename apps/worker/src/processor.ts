@@ -1,4 +1,4 @@
-import { type Database, ingestPush } from '@waymark/db';
+import { type Database, detachInstallation, ingestPush } from '@waymark/db';
 import type { GitHubEventJob, IndexJob } from '@waymark/queue';
 import { type Logger, pino } from 'pino';
 
@@ -47,10 +47,16 @@ export function createProcessor(db: Database, log: Logger, options: ProcessorOpt
         }
         return result;
       }
+      case 'detach': {
+        const { deliveryId, installationId, githubIds } = job.payload;
+        const detached = await detachInstallation(db, installationId, githubIds ?? undefined);
+        log.info({ deliveryId, installationId, detached }, 'repositories detached from the App');
+        return { detached };
+      }
       default: {
         // A job type without a handler must fail loudly, not be marked "completed" and lost.
-        const unknown: never = job.type;
-        throw new Error(`No handler for job type ${String(unknown)}`);
+        const unknown: never = job;
+        throw new Error(`No handler for job type ${String((unknown as { type: unknown }).type)}`);
       }
     }
   };

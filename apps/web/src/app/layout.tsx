@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { getViewer } from '@/lib/auth';
 import './globals.css';
 
 const inter = Inter({ subsets: ['latin', 'latin-ext'], variable: '--font-inter' });
@@ -12,7 +13,8 @@ export const metadata: Metadata = {
   description: 'A living map of your projects.',
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const viewer = await getViewer();
   return (
     <html lang="en" className={`${inter.variable} ${mono.variable}`}>
       <body className="min-h-dvh font-sans antialiased">
@@ -22,6 +24,29 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <WaymarkGlyph />
               <span className="text-[15px] font-semibold tracking-tight text-text">waymark</span>
             </Link>
+            {viewer && (
+              <div className="ml-auto flex items-center gap-3">
+                {viewer.avatarUrl && (
+                  // biome-ignore lint/performance/noImgElement: a 24px avatar from GitHub; no optimisation needed.
+                  <img
+                    src={viewer.avatarUrl}
+                    alt=""
+                    width={24}
+                    height={24}
+                    className="size-6 rounded-full border border-line"
+                  />
+                )}
+                <span className="text-sm text-muted">{viewer.login}</span>
+                <form action="/auth/logout" method="post">
+                  <button
+                    type="submit"
+                    className="rounded-lg border border-line px-2.5 py-1 text-xs text-muted hover:border-line-strong hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    Sign out
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         </header>
         {children}

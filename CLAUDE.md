@@ -38,6 +38,7 @@ pnpm topics:local <path|owner/repo> [--describe]   # topics; --describe calls Cl
 pnpm bench               # webhook load test (needs a running server + worker)
 pnpm demo <path|o/r> [--describe]   # seed the local DB for the dashboard (no GitHub App)
 pnpm web                 # dashboard on http://127.0.0.1:3100
+pnpm stack:up            # everything in Docker (profile "app"); stack:down / stack:logs
 pnpm bench:index o/r …   # index public GitHub repositories and report timings
 ```
 

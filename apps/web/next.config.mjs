@@ -2,18 +2,31 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
 
-// The dashboard reads the repository's .env for DATABASE_URL only: it needs no API keys or the
-// GitHub App key, so they never enter this process.
+// The dashboard reads only what it needs from the repository's .env: the database and the
+// sign-in settings. The App's private key, the webhook secret, and AI keys never enter this process.
+const WEB_KEYS = [
+  'DATABASE_URL',
+  'GITHUB_APP_CLIENT_ID',
+  'GITHUB_APP_CLIENT_SECRET',
+  'WAYMARK_ALLOWED_USERS',
+  'WAYMARK_PUBLIC_URL',
+  'GITHUB_WEB_URL',
+  'GITHUB_API_URL',
+];
 const rootEnv = fileURLToPath(new URL('../../.env', import.meta.url));
-if (!process.env.DATABASE_URL && existsSync(rootEnv)) {
-  const { DATABASE_URL } = parseEnv(readFileSync(rootEnv, 'utf8'));
-  if (DATABASE_URL) process.env.DATABASE_URL = DATABASE_URL;
+if (existsSync(rootEnv)) {
+  const fromFile = parseEnv(readFileSync(rootEnv, 'utf8'));
+  for (const key of WEB_KEYS) {
+    // The real environment (e.g. Docker) wins over the file.
+    if (process.env[key] === undefined && fromFile[key] !== undefined)
+      process.env[key] = fromFile[key];
+  }
 }
 
 /** @type {import('next').NextConfig} */
 const config = {
   // Workspace packages ship TypeScript sources; Next compiles them like app code.
-  transpilePackages: ['@waymark/db', '@waymark/indexer'],
+  transpilePackages: ['@waymark/db', '@waymark/github', '@waymark/indexer'],
   serverExternalPackages: ['postgres'],
   // Type checking runs in the monorepo's own `pnpm typecheck` (TypeScript 7).
   typescript: { ignoreBuildErrors: true },

@@ -15,6 +15,7 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { loadWorkerEnv } from '@waymark/core';
 import {
+  ALL_REPOSITORIES,
   commits,
   createDatabase,
   findRepository,
@@ -81,7 +82,7 @@ const { db, close } = createDatabase(env.DATABASE_URL);
 try {
   // Name: two folders called `app` must not share a map, so a taken name gets a short suffix.
   let fullName = isLocal ? `local/${basename(local) || 'root'}` : target;
-  const existing = await findRepository(db, fullName);
+  const existing = await findRepository(db, fullName, ALL_REPOSITORIES);
   if (existing && existing.githubId !== demoId) fullName = `${fullName}-${digest.slice(0, 6)}`;
 
   // Head commit and branch.

@@ -2,6 +2,7 @@ import { listRepositoryCards, type RepositoryCard } from '@waymark/db';
 import { GitCommitHorizontal, Lock, Network, StickyNote } from 'lucide-react';
 import Link from 'next/link';
 import { OverviewSection } from '@/components/OverviewSection';
+import { requireScope } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { compact, timeAgo } from '@/lib/format';
 import { mapHref } from '@/lib/paths';
@@ -13,7 +14,7 @@ export const dynamic = 'force-dynamic';
 const OVERVIEW_PROJECTS = 60;
 
 export default async function Home() {
-  const cards = await listRepositoryCards(db());
+  const cards = await listRepositoryCards(db(), await requireScope());
   const active = cards.filter((c) => c.commits7d > 0).length;
 
   return (

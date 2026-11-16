@@ -1,3 +1,19 @@
+export {
+  ALL_REPOSITORIES,
+  createSession,
+  deleteSession,
+  deleteUserSessions,
+  detachInstallation,
+  findUserByLogin,
+  findViewer,
+  NO_REPOSITORIES,
+  type RepositoryScope,
+  SESSION_HOURS,
+  scopeCondition,
+  scopeOf,
+  upsertUser,
+  type Viewer,
+} from './auth.ts';
 export { createDatabase, type Database, type DatabaseHandle } from './client.ts';
 export {
   ACTIVITY_WINDOW_DAYS,

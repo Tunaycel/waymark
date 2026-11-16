@@ -4,7 +4,7 @@ import {
   parsePushEvent,
   verifyGitHubSignature,
 } from '@waymark/core';
-import type { EnqueueOutcome, IndexJob } from '@waymark/queue';
+import type { DetachJob, EnqueueOutcome, IndexJob } from '@waymark/queue';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 
 export interface AppDeps {
@@ -13,6 +13,8 @@ export interface AppDeps {
   enqueuePush: (job: PushJob) => Promise<EnqueueOutcome>;
   /** Schedules initial indexing for repositories the App was just given access to. */
   enqueueIndex?: (jobs: IndexJob[]) => Promise<void>;
+  /** Hides repositories the App lost access to (uninstalled, or removed from it). */
+  enqueueDetach?: (job: DetachJob) => Promise<EnqueueOutcome>;
   /** Readiness probe for downstream dependencies (Redis). */
   isReady?: () => Promise<boolean>;
   logger?: FastifyServerOptions['logger'];
@@ -94,6 +96,23 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         const parsed = parseInstallationEvent(event, payload);
         if (parsed.kind === 'skip') {
           return reply.code(202).send({ status: 'skipped', reason: parsed.reason });
+        }
+        if (parsed.kind === 'detach') {
+          if (!deps.enqueueDetach) {
+            return reply.code(202).send({ status: 'skipped', reason: 'detach_disabled' });
+          }
+          try {
+            const outcome = await deps.enqueueDetach({
+              deliveryId,
+              installationId: parsed.installationId,
+              githubIds: parsed.githubIds,
+            });
+            req.log.info({ deliveryId, ...outcome }, 'repositories detach scheduled');
+            return reply.code(202).send({ status: outcome.status });
+          } catch (err) {
+            req.log.error({ err, deliveryId }, 'failed to enqueue detach');
+            return reply.code(503).send({ error: 'queue unavailable, redeliver later' });
+          }
         }
         const jobs: IndexJob[] = parsed.repositories.map((r) => ({
           githubId: r.githubId,

@@ -3,6 +3,7 @@
  * than one snapshot's topics plus a window of recent commits.
  */
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { type RepositoryScope, scopeCondition } from './auth.ts';
 import type { Database } from './client.ts';
 import {
   commits,
@@ -123,11 +124,16 @@ async function recentActivity(
 
 export type RecentCommit = Awaited<ReturnType<typeof recentActivity>>[number];
 
-export async function listRepositoryCards(db: Database): Promise<RepositoryCard[]> {
+/** Every repository the scope may see, as project cards. */
+export async function listRepositoryCards(
+  db: Database,
+  scope: RepositoryScope,
+): Promise<RepositoryCard[]> {
   // Most recently pushed first; never-pushed (e.g. just installed) last.
   const repos = await db
     .select()
     .from(repositories)
+    .where(scopeCondition(scope))
     .orderBy(sql`${repositories.lastPushAt} desc nulls last`, repositories.fullName);
   const snapshots = await latestSnapshots(
     db,
@@ -281,18 +287,23 @@ export interface RepositoryMap {
   edges: { from: string; to: string; weight: number }[];
 }
 
-export async function findRepository(db: Database, fullName: string) {
+/** A repository by name, case-insensitively, if the scope may see it. */
+export async function findRepository(db: Database, fullName: string, scope: RepositoryScope) {
   const [repo] = await db
     .select()
     .from(repositories)
-    .where(sql`lower(${repositories.fullName}) = lower(${fullName})`)
+    .where(and(sql`lower(${repositories.fullName}) = lower(${fullName})`, scopeCondition(scope)))
     .limit(1);
   return repo ?? null;
 }
 
 /** Everything the map page draws, for the repository's latest snapshot with topics. */
-export async function repositoryMap(db: Database, fullName: string): Promise<RepositoryMap | null> {
-  const repo = await findRepository(db, fullName);
+export async function repositoryMap(
+  db: Database,
+  fullName: string,
+  scope: RepositoryScope,
+): Promise<RepositoryMap | null> {
+  const repo = await findRepository(db, fullName, scope);
   if (!repo) return null;
   const snap = (await latestSnapshots(db, [repo.id])).get(repo.id);
   if (!snap) return null;
@@ -407,12 +418,20 @@ export async function topicDetail(
   repositoryId: string,
   snapshotId: string,
   topicId: string,
+  scope: RepositoryScope,
 ): Promise<TopicDetail | null> {
   const [snap] = await db
     .select({ summary: repoSnapshots.summary })
     .from(repoSnapshots)
-    .where(and(eq(repoSnapshots.id, snapshotId), eq(repoSnapshots.repositoryId, repositoryId)));
-  // A snapshot of another repository: nothing to show rather than a mix of two.
+    .innerJoin(repositories, eq(repositories.id, repoSnapshots.repositoryId))
+    .where(
+      and(
+        eq(repoSnapshots.id, snapshotId),
+        eq(repoSnapshots.repositoryId, repositoryId),
+        scopeCondition(scope),
+      ),
+    );
+  // A snapshot of another repository, or one the viewer may not see: nothing to show.
   if (!snap) return null;
 
   const inTopic = and(eq(snapshotFiles.snapshotId, snapshotId), eq(snapshotFiles.topicId, topicId));
