@@ -25,7 +25,8 @@ your morning brief covers your whole day, not just your repositories.
 > [!NOTE]
 > Waymark is in **Phase 1c**: every repository is ingested, indexed, grouped into named topics
 > ("Session Auth", "Stripe Webhooks"), and shown as an interactive map in a local dashboard.
-> "Where you left off" and the daily briefs are next. See the [roadmap](docs/ROADMAP.md).
+> Next: a 3D overview, then GitHub sign-in with hosting, then chatting with Waymark on Telegram.
+> See the [roadmap](docs/ROADMAP.md).
 
 ## How it works
 
@@ -215,10 +216,12 @@ docs/         Architecture, roadmap, GitHub App setup
 | 0 · Foundation | Reliable GitHub ingestion | ✅ |
 | 1a · Indexer | Import graph, modules, dependencies, TODOs per repository | ✅ |
 | 1b · Topics | Files grouped into named, summarised topics | ✅ |
-| 1c · Living map | Local dashboard with an interactive map of every project | 🚧 |
-| 1d · Where you left off | Recently touched topics, open branches, new TODOs | 📋 |
+| 1c · Living map | Local dashboard with an interactive map of every project; then a 3D overview | 🚧 |
+| 1c-3 · Hosting | Sign in with GitHub, your repositories indexed automatically, runs 24/7 | 📋 |
+| 1d · Ask Waymark | Chat with an agent about your projects on Telegram | 📋 |
+| 1e · Where you left off | Recently touched topics, open branches, new TODOs | 📋 |
 | 2 · Review | Per-push triage, nightly review, pattern memory | 📋 |
-| 3 · Life layer | Calendar, tasks, morning brief on WhatsApp/Telegram | 📋 |
+| 3 · Life layer | Calendar, tasks, morning brief; WhatsApp as a second channel | 📋 |
 | 4 · Ecosystem | MCP server, works inside other agents | 📋 |
 | 5 · Watches | Payments, regulations, events: anything you add | 📋 |
 

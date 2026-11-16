@@ -378,10 +378,15 @@ lookup, a 3,000-file commit, foreign snapshots).
 
 ## 7. Engines (planned)
 
-### ① Project Mapper: from index to living map (Phases 1b–1d)
+### ① Project Mapper: from index to living map (Phases 1b–1e)
 - **Topics (1b):** see section 5.
 - **Dashboard (1c):** see section 6.
-- **"Where you left off" (1d):** recently touched topics, open branches, unfinished PRs, new
+- **Hosting and GitHub sign-in (1c-3):** the existing GitHub App doubles as the sign-in; a user
+  sees only the repositories they installed it on. Ships before anything is reachable from the
+  internet, since the dashboard has no sign-in until then.
+- **Ask Waymark (1d):** a Telegram bot backed by an agent with read-only tools over topics,
+  commits, and TODOs; same model, budget, and "structure, never code" rule as topic naming.
+- **"Where you left off" (1e):** recently touched topics, open branches, unfinished PRs, new
   TODO/FIXME, WIP commits, and the next roadmap milestone.
 
 ### ② Review Engine (Phase 2)
