@@ -388,6 +388,11 @@ The layout is pure and deterministic (`constellation.ts`), so a project keeps it
 - **Stars** fill a ball evenly, largest at the inner part. Linked stars are drawn together by springs
   with a rest length, and a hub's pull is divided by its link count, so a topic that everything
   imports doesn't swallow its neighbours into one white blot.
+- **Signals** run along links as short streaks, from the end that changed most recently outward:
+  fast and bright where work happened today, calmer this week; a quiet project keeps up to 10
+  slow ones. Links take the colour of their ends, glowing where work is and fading into quiet.
+  Stars are crisp discs with a short glow, antialiased in the shader (no canvas supersampling),
+  sized by the screen's pixel ratio and capped so flying into a cluster never floods the screen.
 - **Labels** are real links positioned over their clusters every frame and pushed apart where they
   would overlap, so the sky is usable by keyboard and screen readers.
 - **Fallbacks:** without WebGL there is no sky; with `prefers-reduced-motion` it starts hidden (and
