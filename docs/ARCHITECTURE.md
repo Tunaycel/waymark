@@ -349,10 +349,61 @@ flowchart LR
 
 Region and group ids are built from URI-encoded path parts (`p:<pkg>/a:<area>`, `g:<dir>`), so no directory name can make two of them collide; the layout drops duplicate or dangling input instead of failing, and a failed layout shows a retry instead of a blank canvas.
 
-### Safety of a local, sign-in-free dashboard
+### Who may see what (1c-3)
 
-- **Bind:** `127.0.0.1` only. **DNS rebinding:** `src/proxy.ts` refuses any request whose `Host` is not a loopback name, so a web page you visit cannot read the dashboard through a domain that resolves to your machine.
-- **Least privilege:** the web process loads only `DATABASE_URL` from `.env`; API keys and the GitHub App key never enter it. All its queries are reads.
+The dashboard has two modes, chosen by configuration and never by accident:
+
+| Mode | When | Who gets in | Answers on |
+|---|---|---|---|
+| Local | no `GITHUB_APP_CLIENT_ID/SECRET` | anyone on this machine | loopback names only |
+| Signed in | both set | GitHub users in `WAYMARK_ALLOWED_USERS` | loopback and `WAYMARK_PUBLIC_URL` |
+
+A half-configured setup (one client variable, a public URL without sign-in, a public URL over
+plain http) makes the dashboard answer 503 with the reason, instead of starting open.
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant W as Dashboard
+  participant G as GitHub
+  participant D as Postgres
+  B->>W: GET /auth/github
+  W-->>B: 302 to GitHub, random state in an HttpOnly cookie
+  B->>G: authorize the Waymark App
+  G-->>B: 302 /auth/callback?code&state
+  B->>W: callback (state must equal the cookie)
+  W->>G: code → user token → /user
+  W->>W: login on the allowlist, and still the account that first used it?
+  W->>G: /user/installations → each: /user/installations/{id}/repositories
+  W->>G: revoke the user token
+  W->>D: upsert user (repository ids), insert sha256(session token)
+  W-->>B: session cookie (HttpOnly, SameSite=Lax, __Host- over https)
+```
+
+- **Scope, per repository:** every read (project list, map, topic panel) takes a
+  `RepositoryScope`: the repositories the viewer could open on GitHub through the App at sign-in,
+  enforced in SQL. Per repository, not per installation: an organisation installation with "all
+  repositories" does not show a member the private repositories they can't open. A repository
+  outside the scope is a 404, not an empty page. Local demo repositories (`pnpm demo`) are hidden
+  from signed-in users unless `WAYMARK_SHOW_DEMOS=true`.
+- **Sessions:** 32 random bytes in the cookie, SHA-256 in the database, **24 hours**: what a session
+  may see is a snapshot of GitHub access, so it must not outlive a change by long. Signing out
+  deletes the row, so a copied cookie stops working. Sign-out is POST-only and checks `Origin`.
+- **Allowlist on every request:** taking a login off `WAYMARK_ALLOWED_USERS` (and restarting)
+  signs that person out everywhere at once. A login is pinned to the GitHub account that first
+  signed in with it, so whoever takes over a renamed login is not let in.
+- **The GitHub token** is used at sign-in only, never stored, and revoked right after.
+- **Known limit:** a push that was queued before the App lost access to a repository can, if it is
+  processed after the removal, attach the repository again until the next removal or sign-in
+  refresh. Visibility still requires the viewer's own GitHub access at sign-in, so this can only
+  show a repository to someone who could open it on GitHub within the last day.
+- **Removing the App** from a repository (or uninstalling it) arrives as a webhook, is queued like a
+  push, and detaches those repositories: they disappear from every dashboard; history is kept.
+
+### Safety of the dashboard process
+
+- **Bind:** `127.0.0.1` only (also in Docker, where ports are published on loopback). **DNS rebinding:** `src/proxy.ts` refuses any request whose `Host` is not a loopback name or the configured public host, so a web page you visit cannot read the dashboard through a domain that resolves to your machine.
+- **Least privilege:** the web process reads only the database URL and the sign-in settings; the App's private key, the webhook secret, and AI keys never enter it (in Docker its environment is listed explicitly). All its queries are reads, except sign-in writing users and sessions.
 - **Inputs:** route names with control characters are 404s; `/api/topic` takes two uuids and a short id (zod), and answers 404 when the snapshot does not belong to the repository.
 - **Recent activity** is mapped to topics inside Postgres (path lookups by primary key, indexed by `commits(repository_id, ingested_at)` and `snapshot_files(snapshot_id, topic_id)`), so a commit that touched 3,000 files costs one query, not 3,000 paths shipped to the app.
 
