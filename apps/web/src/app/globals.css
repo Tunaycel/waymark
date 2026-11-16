@@ -49,6 +49,7 @@
   --color-accent: var(--accent);
   --color-live: var(--live);
   --color-todo: var(--todo);
+  --color-danger: var(--danger);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-mono), ui-monospace, monospace;
 }
